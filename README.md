@@ -1,11 +1,12 @@
 # ZUI
 
 ZUI is a declarative UI framework in Zig, developed after
-[PUI](https://github.com/buganini/PUI)/[CPPUI](https://github.com/buganini/CPPUI).
+[PUI (Python)](https://github.com/buganini/PUI) and
+[CPPUI (C++)](https://github.com/buganini/CPPUI).
 It currently targets **LVGL**, with an SDL2 desktop host on Linux.
 
 The first working version includes reactive state and two-way bindings,
-keyed widget reuse, HBox/VBox, Grid, Scroll, Label, Button, Checkbox and TextField.
+keyed widget reuse, HBox/VBox, Grid, Scroll, Splitter, Label, Button, Checkbox and TextField.
 The demo combines a counter, an editable form and a reorderable list of editors.
 
 ## Build and run
@@ -138,6 +139,13 @@ try app.run();
 - Each App exclusively owns one LVGL/SDL runtime. Destroy it after callbacks
   unwind; `requestQuit()` is safe inside callbacks. Borrowed hosts, multiple
   concurrent Apps and other backends are outside this first version.
+
+`width_percent` and `height_percent` size a control relative to its parent;
+use either a percentage or a pixel size on each axis. `splitter(binding, options)`
+contains exactly two panes and takes a `Binding(u8)` percentage, clamped to
+10–90. It owns the panes' sizes and flex weights. Set `vertical = true` to stack
+panes. Drag its divider, or focus it with Tab and use arrow keys. Text/background
+colors and `small_text` can be set on a control or inherited from a container.
 
 ## Source layout
 

@@ -220,3 +220,55 @@ fn allocationScenario(allocator: std.mem.Allocator) !void {
 test "every Zig allocation failure while mounting or reconciling cleans up" {
     try std.testing.checkAllAllocationFailures(a, allocationScenario, .{});
 }
+
+test "splitter resizes retained panes, clamps keyboard input and rejects missing panes" {
+    const Split = struct {
+        ratio: zui.State(u8),
+        vertical: bool = false,
+        missing: bool = false,
+        pub fn build(self: *@This(), ui: *zui.Builder) !void {
+            var panes = try ui.splitter(self.ratio.binding(), .{
+                .key = "panes",
+                .height_percent = 100,
+                .vertical = self.vertical,
+            });
+            var left = try panes.vbox(.{ .key = "left" });
+            try left.label("Code", .{});
+            if (!self.missing) {
+                var right = try panes.vbox(.{ .key = "right" });
+                try right.label("Result", .{});
+            }
+        }
+    };
+    var model = Split{ .ratio = zui.State(u8).init(a, 50) };
+    defer model.ratio.deinit();
+    const app = try zui.App.create(a, &model, .{ .width = 800, .height = 600 });
+    defer app.destroy();
+    try app.flush();
+    const panes = app.find("panes").?;
+    const left = app.find("left").?;
+    const right = app.find("right").?;
+    const handle = c.lv_obj_get_child(panes, 1);
+    c.lv_obj_update_layout(panes);
+    const initial = c.lv_obj_get_width(left);
+    var key: u32 = c.LV_KEY_RIGHT;
+    for (0..3) |_| _ = c.lv_obj_send_event(handle, c.LV_EVENT_KEY, &key);
+    try std.testing.expectEqual(65, model.ratio.peek());
+    try app.flush();
+    c.lv_obj_update_layout(panes);
+    try std.testing.expect(c.lv_obj_get_width(left) > initial);
+    try std.testing.expectEqual(right, app.find("right").?);
+    try std.testing.expectEqual(handle, c.lv_obj_get_child(panes, 1));
+    for (0..20) |_| _ = c.lv_obj_send_event(handle, c.LV_EVENT_KEY, &key);
+    try std.testing.expectEqual(90, model.ratio.peek());
+    model.vertical = true;
+    try model.ratio.set(30);
+    try app.flush();
+    c.lv_obj_update_layout(panes);
+    try std.testing.expect(c.lv_obj_get_y(right) > c.lv_obj_get_y(left));
+    try std.testing.expect(c.lv_obj_get_height(left) < c.lv_obj_get_height(right));
+    model.missing = true;
+    app.invalidate();
+    try std.testing.expectError(error.InvalidPaneCount, app.flush());
+    try std.testing.expectEqual(right, app.find("right").?);
+}

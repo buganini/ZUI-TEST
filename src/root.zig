@@ -16,6 +16,7 @@ const Mounted = struct {
     app: *App,
     object: ?*c.lv_obj_t = null,
     label: ?*c.lv_obj_t = null,
+    handle: ?*c.lv_obj_t = null,
     declaration: *Declaration,
     children: std.ArrayListUnmanaged(*Mounted) = std.ArrayListUnmanaged(*Mounted).empty,
 };
@@ -175,6 +176,19 @@ pub const App = struct {
         if (declaration.kind == .button)
             mounted.label = c.lv_label_create(object) orelse return error.NativeCreateFailed;
         if (declaration.kind == .text_field) c.lv_textarea_set_one_line(object, true);
+        if (declaration.kind == .splitter) {
+            const handle = c.lv_obj_create(object) orelse return error.NativeCreateFailed;
+            mounted.handle = handle;
+            c.lv_obj_remove_flag(handle, c.LV_OBJ_FLAG_SCROLLABLE);
+            c.lv_obj_set_style_pad_all(handle, 0, 0);
+            c.lv_obj_set_style_border_width(handle, 0, 0);
+            c.lv_obj_set_style_radius(handle, 3, 0);
+            c.lv_obj_set_style_bg_color(handle, c.lv_color_hex(0xa7b4c2), 0);
+            c.lv_obj_set_style_bg_color(handle, c.lv_color_hex(0x2196f3), c.LV_STATE_FOCUSED);
+            c.lv_obj_set_ext_click_area(handle, 4);
+            c.lv_group_add_obj(c.lv_group_get_default(), handle);
+            _ = c.lv_obj_add_event_cb(handle, splitterCallback, c.LV_EVENT_ALL, mounted);
+        }
         _ = c.lv_obj_add_event_cb(object, eventCallback, c.LV_EVENT_ALL, mounted);
         return mounted;
     }
@@ -191,6 +205,7 @@ pub const App = struct {
         // An externally deleted native subtree still has Zig records. They are
         // retired during commit, while new records are staged independently.
         const children = declaration.children.items;
+        if (declaration.kind == .splitter and children.len != 2) return error.InvalidPaneCount;
         plan.children = try arena.alloc(*Plan, children.len);
         try plan.mounted.children.ensureTotalCapacity(self.allocator, children.len);
         if (declaration.kind == .grid) {
@@ -254,11 +269,18 @@ pub const App = struct {
             self.commit(child);
             mounted.children.appendAssumeCapacity(child.mounted);
             c.lv_obj_move_to_index(child.mounted.object.?, @intCast(index));
+            if (plan.declaration.kind == .splitter) {
+                const vertical = plan.declaration.options.vertical;
+                c.lv_obj_set_size(child.mounted.object.?, if (vertical) c.lv_pct(100) else 0, if (vertical) 0 else c.lv_pct(100));
+                const ratio = plan.declaration.split_ratio;
+                c.lv_obj_set_flex_grow(child.mounted.object.?, if (index == 0) ratio else 100 - ratio);
+            }
             if (plan.declaration.kind == .grid) {
                 const columns = plan.declaration.options.columns;
                 c.lv_obj_set_grid_cell(child.mounted.object.?, c.LV_GRID_ALIGN_STRETCH, @intCast(index % columns), 1, c.LV_GRID_ALIGN_START, @intCast(index / columns), 1);
             }
         }
+        if (mounted.handle) |handle| c.lv_obj_move_to_index(handle, 1);
         c.lv_obj_remove_flag(mounted.object.?, c.LV_OBJ_FLAG_HIDDEN);
     }
 
@@ -268,7 +290,7 @@ pub const App = struct {
         const declaration = plan.declaration;
         const options = declaration.options;
         const container = switch (declaration.kind) {
-            .root, .column, .row, .grid, .scroll => true,
+            .root, .column, .row, .grid, .scroll, .splitter => true,
             else => false,
         };
         if (container) {
@@ -280,13 +302,14 @@ pub const App = struct {
             if (declaration.kind == .grid) {
                 c.lv_obj_set_grid_dsc_array(object, plan.columns.?, plan.rows.?);
             } else {
-                c.lv_obj_set_flex_flow(object, if (declaration.kind == .row) c.LV_FLEX_FLOW_ROW else c.LV_FLEX_FLOW_COLUMN);
+                const horizontal = declaration.kind == .row or (declaration.kind == .splitter and !options.vertical);
+                c.lv_obj_set_flex_flow(object, if (horizontal) c.LV_FLEX_FLOW_ROW else c.LV_FLEX_FLOW_COLUMN);
             }
             if (declaration.kind != .scroll and declaration.kind != .root)
                 c.lv_obj_remove_flag(object, c.LV_OBJ_FLAG_SCROLLABLE);
         }
-        const width = options.width orelse (if (container or declaration.kind == .text_field) c.lv_pct(100) else c.LV_SIZE_CONTENT);
-        const height = options.height orelse (switch (declaration.kind) {
+        const width = if (options.width_percent) |percent| c.lv_pct(percent) else options.width orelse (if (container or declaration.kind == .text_field) c.lv_pct(100) else c.LV_SIZE_CONTENT);
+        const height = if (options.height_percent) |percent| c.lv_pct(percent) else options.height orelse (switch (declaration.kind) {
             .root => c.lv_pct(100),
             .scroll => 200,
             else => c.LV_SIZE_CONTENT,
@@ -294,6 +317,22 @@ pub const App = struct {
         c.lv_obj_set_size(object, width, height);
         c.lv_obj_set_flex_grow(object, options.grow);
         c.lv_obj_set_state(object, c.LV_STATE_DISABLED, options.disabled);
+        c.lv_obj_set_state(object, c.LV_STATE_CHECKED, options.selected);
+        if (options.text_color) |color| {
+            c.lv_obj_set_style_text_color(object, c.lv_color_hex(color), 0);
+        } else _ = c.lv_obj_remove_local_style_prop(object, c.LV_STYLE_TEXT_COLOR, 0);
+        if (options.background) |color| {
+            c.lv_obj_set_style_bg_color(object, c.lv_color_hex(color), 0);
+            c.lv_obj_set_style_bg_opa(object, c.LV_OPA_COVER, 0);
+        } else {
+            _ = c.lv_obj_remove_local_style_prop(object, c.LV_STYLE_BG_COLOR, 0);
+            _ = c.lv_obj_remove_local_style_prop(object, c.LV_STYLE_BG_OPA, 0);
+        }
+        if (options.small_text) {
+            c.lv_obj_set_style_text_font(object, &c.lv_font_montserrat_12, 0);
+        } else _ = c.lv_obj_remove_local_style_prop(object, c.LV_STYLE_TEXT_FONT, 0);
+        if (mounted.handle) |handle|
+            c.lv_obj_set_size(handle, if (options.vertical) c.lv_pct(100) else 8, if (options.vertical) 8 else c.lv_pct(100));
         switch (declaration.kind) {
             .label => c.lv_label_set_text(object, declaration.text.ptr),
             .button => {
@@ -322,6 +361,7 @@ pub const App = struct {
         if (code == c.LV_EVENT_DELETE) {
             mounted.object = null;
             mounted.label = null;
+            mounted.handle = null;
             app.invalidate();
             return;
         }
@@ -351,6 +391,39 @@ pub const App = struct {
                 };
             }
         }
+    }
+
+    fn splitterCallback(event: ?*c.lv_event_t) callconv(.c) void {
+        const e = event orelse return;
+        const mounted: *Mounted = @ptrCast(@alignCast(c.lv_event_get_user_data(e) orelse return));
+        const app = mounted.app;
+        if (app.busy) return;
+        const object = mounted.object orelse return;
+        const declaration = mounted.declaration.*;
+        const binding = declaration.split_binding orelse return;
+        const code = c.lv_event_get_code(e);
+        var ratio: i32 = std.math.clamp(binding.read(binding.context), 10, 90);
+        if (code == c.LV_EVENT_PRESSING) {
+            const indev = c.lv_indev_active() orelse return;
+            var point: c.lv_point_t = undefined;
+            c.lv_indev_get_point(indev, &point);
+            var area: c.lv_area_t = undefined;
+            c.lv_obj_get_content_coords(object, &area);
+            const vertical = declaration.options.vertical;
+            const size = (if (vertical) area.y2 - area.y1 else area.x2 - area.x1) + 1;
+            if (size <= 0) return;
+            const offset = if (vertical) point.y - area.y1 else point.x - area.x1;
+            ratio = @divTrunc(offset * 100, size);
+        } else if (code == c.LV_EVENT_KEY) {
+            const key = c.lv_event_get_key(e);
+            if (key == c.LV_KEY_LEFT or key == c.LV_KEY_UP) ratio -= 5 else if (key == c.LV_KEY_RIGHT or key == c.LV_KEY_DOWN) ratio += 5 else return;
+        } else return;
+        app.dispatch_depth += 1;
+        defer app.dispatch_depth -= 1;
+        binding.set(@intCast(std.math.clamp(ratio, 10, 90))) catch |err| {
+            app.event_error = err;
+            app.invalidate();
+        };
     }
 };
 

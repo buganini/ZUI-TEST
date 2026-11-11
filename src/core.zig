@@ -176,16 +176,23 @@ pub fn callback(context: anytype, comptime function: anytype) Callback {
     }.invoke };
 }
 
-pub const Kind = enum { root, column, row, grid, scroll, label, button, checkbox, text_field };
+pub const Kind = enum { root, column, row, grid, scroll, splitter, label, button, checkbox, text_field };
 
 pub const Options = struct {
     key: ?[]const u8 = null,
     width: ?i32 = null,
     height: ?i32 = null,
+    width_percent: ?u8 = null,
+    height_percent: ?u8 = null,
     padding: i32 = 0,
     gap: i32 = 8,
     grow: u8 = 0,
     disabled: bool = false,
+    selected: bool = false,
+    vertical: bool = false,
+    text_color: ?u32 = null,
+    background: ?u32 = null,
+    small_text: bool = false,
     columns: u16 = 2,
     on_click: ?Callback = null,
 };
@@ -197,6 +204,8 @@ pub const Declaration = struct {
     checked: bool = false,
     bool_binding: ?Binding(bool) = null,
     text_binding: ?Binding([]const u8) = null,
+    split_binding: ?Binding(u8) = null,
+    split_ratio: u8 = 50,
     children: std.ArrayListUnmanaged(*Declaration) = std.ArrayListUnmanaged(*Declaration).empty,
 };
 
@@ -241,6 +250,12 @@ pub const Builder = struct {
             (options.width != null and options.width.? < 0) or
             (options.height != null and options.height.? < 0)) return error.InvalidLayout;
         if (kind == .grid and options.columns == 0) return error.InvalidLayout;
+        if (options.width_percent) |percent| {
+            if (percent > 100 or options.width != null) return error.InvalidLayout;
+        }
+        if (options.height_percent) |percent| {
+            if (percent > 100 or options.height != null) return error.InvalidLayout;
+        }
         if (std.mem.indexOfScalar(u8, text, 0) != null) return error.EmbeddedNul;
         if (options.key) |key| {
             if (key.len == 0) return error.EmptyKey;
@@ -273,6 +288,15 @@ pub const Builder = struct {
     }
     pub fn grid(self: *Builder, options: Options) !Builder {
         return self.container(.grid, options);
+    }
+    /// Exactly two child panes. Ratio is a percentage, clamped to 10..90.
+    /// Drag the divider or focus it and use the arrow keys to resize.
+    pub fn splitter(self: *Builder, ratio: Binding(u8), options: Options) !Builder {
+        const value = try ratio.get(self);
+        const panes = try self.container(.splitter, options);
+        panes.parent.split_binding = ratio;
+        panes.parent.split_ratio = std.math.clamp(value, 10, 90);
+        return panes;
     }
     pub fn label(self: *Builder, text: []const u8, options: Options) !void {
         _ = try self.add(.label, text, options);
