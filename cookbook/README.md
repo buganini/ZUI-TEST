@@ -66,8 +66,20 @@ page preserves keyed control identity and editor caret position.
 - `tests.zig`: native events and assertions, kept out of interactive recipes.
 - `capture.zig`: headless screenshots of implemented pages and a fallback page.
 
+All recipes use the same chainable declaration API, for example:
+
+```zig
+_ = ui.label("Hello World")
+    .key("greeting")
+    .visible(model.greeting_visible.get(ui));
+```
+
+Containers use the same modifiers: `const row = ui.hbox().gap(12)`; add children
+through `row`. `_ =` discards a returned handle when no further use is needed.
+The former options argument is no longer accepted.
+
 Declarations and tracked reads omit `try`: Builder records the first error and
-Each View checks it when its own `content()` returns. A recipe can report its
+each View checks it when its own `content()` returns. A recipe can report its
 own failure with `ui.fail(err)`. Event callbacks still propagate State write
 errors explicitly.
 
@@ -81,5 +93,5 @@ These use SDL's dummy/software drivers and do not need a desktop session.
 Snapshots are written to `.build/cookbook-<key>.bmp`. The checks exercise every
 sidebar entry, live bindings, keyed reflow, navigation state, a narrower window,
 source reload, missing/invalid files, bounded external-binding logs and independently
-updated Views. The Views recipe keeps both pages mounted using `.visible`; an
+updated Views. The Views recipe keeps both pages mounted using `.visible(bool)`; an
 `if` around a declaration would remove it. Hidden Views currently keep updating.

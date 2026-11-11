@@ -102,18 +102,30 @@ following PUI / CPPUI:
 
 ```zig
 pub fn content(self: *Counter, ui: *zui.Builder) void {
-    var column = ui.vbox(.{ .padding = 12, .gap = 8 });
-    column.labelFmt("Count: {d}", .{self.count.get(ui)}, .{});
-    column.button("+", .{
-        .key = "increment",
-        .on_click = zui.callback(self, increment),
-    });
+    const column = ui.vbox().padding(12).gap(8);
+    _ = column.labelFmt("Count: {d}", .{self.count.get(ui)});
+    _ = column.button("+").key("increment").onClick(zui.callback(self, increment));
 }
 
 fn increment(self: *Counter) !void {
     try self.count.set(self.count.peek() + 1);
 }
 ```
+
+Every widget, container and View declaration returns a `Builder` handle.
+Modifiers return the same handle for chaining; use `_ =` when its result is not
+needed, or keep a `const` handle to add children to a container. Copies refer to
+the same snapshot node, so configuring a copy updates that declaration too.
+Factories take only their content or binding arguments; configuration uses
+methods such as `.key()`, `.visible()`, `.widthPercent()` and `.onClick()`.
+The former options argument has been removed. Methods use Zig's `lowerCamelCase`;
+type names remain `TitleCase`.
+
+Valid repeated settings use the last value. Invalid settings latch the first
+error even if a later setter would correct them. Keys are copied and checked
+against siblings on every `.key()` call. Leaf controls cannot contain children;
+virtual Views accept `.key()` and take layout/visibility from their physical
+containers. Invalid modifiers are reported at the same deferred error boundary.
 
 Widget declarations and tracked reads do not need `try`. All builders in one
 `content()` call share its first declaration error, including allocation failures
@@ -164,13 +176,13 @@ when only one View is dirty.
 
 ```zig
 pub fn content(self: *Window, ui: *zui.Builder) void {
-    var page = ui.vbox(.{ .visible = self.show_counter.get(ui) });
-    page.view(&self.counter, .{ .key = "counter" });
+    const page = ui.vbox().visible(self.show_counter.get(ui));
+    _ = page.view(&self.counter).key("counter");
 }
 ```
 
-All widgets and physical containers use `Options.visible` (default `true`).
-`.visible = false` hides a retained control and excludes it from layout;
+All widgets and physical containers provide `.visible(bool)` (default `true`).
+`.visible(false)` hides a retained control and excludes it from layout;
 showing it again preserves its identity and unchanged editor caret. An `if`
 around the declaration instead removes and later remounts it. Virtual Views
 have no native visibility flag: put visibility on their physical container,
@@ -189,7 +201,7 @@ See the [Views recipe](cookbook/views.zig) for independent counters and retained
   tests, `app.invalidate()` for non-reactive root fields, or
   `app.findView(key).?.invalidate()` for non-reactive child fields. Building a
   View cannot mutate State; callbacks cannot recursively flush.
-- `ui.view(&child_model, .{ .key = "child" })` declares a retained virtual subtree
+- `ui.view(&child_model).key("child")` declares a retained virtual subtree
   with its own subscriptions and snapshot. It can emit zero or more children
   without adding an LVGL wrapper. Ordinary functions accepting builders still
   share their caller's View. Cross-thread posting, computed state and explicit
@@ -220,12 +232,13 @@ See the [Views recipe](cookbook/views.zig) for independent counters and retained
   unwind; `requestQuit()` is safe inside callbacks. Borrowed hosts, multiple
   concurrent Apps and other backends are outside this first version.
 
-`width_percent` and `height_percent` size a control relative to its parent;
-use either a percentage or a pixel size on each axis. `splitter(binding, options)`
-contains exactly two panes and takes a `Binding(u8)` percentage, clamped to
-10–90. It owns the panes' sizes and flex weights. Set `vertical = true` to stack
-panes. Drag its divider, or focus it with Tab and use arrow keys. Text/background
-colors and `small_text` can be set on a control or inherited from a container.
+`widthPercent()` and `heightPercent()` size a control relative to its parent.
+`width()` / `height()` use pixels; the last size setter replaces the previous
+unit on that axis. `splitter(binding)` contains exactly two panes and takes a
+`Binding(u8)` percentage, clamped to 10–90. It owns the panes' sizes and flex weights. Call `.vertical(true)` to stack
+panes. Drag its divider, or focus it with Tab and use arrow keys.
+`.textColor()`, `.background()` and `.smallText()` can be set on a control
+or inherited from a container.
 
 ## Source layout
 
