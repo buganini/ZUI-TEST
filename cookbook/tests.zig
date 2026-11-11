@@ -5,25 +5,25 @@ const c = zui.native;
 const a = std.testing.allocator;
 const io = std.testing.io;
 
-fn click(app: *zui.App, key: []const u8) !void {
+fn click(app: *zui.Application, key: []const u8) !void {
     const object = app.find(key) orelse return error.MissingControl;
     _ = c.lv_obj_send_event(object, c.LV_EVENT_CLICKED, null);
     try app.flush();
 }
-fn check(app: *zui.App, key: []const u8, value: bool) !void {
+fn check(app: *zui.Application, key: []const u8, value: bool) !void {
     const object = app.find(key) orelse return error.MissingControl;
     c.lv_obj_set_state(object, c.LV_STATE_CHECKED, value);
     _ = c.lv_obj_send_event(object, c.LV_EVENT_VALUE_CHANGED, null);
     try app.flush();
 }
-fn text(app: *zui.App, key: []const u8) []const u8 {
+fn text(app: *zui.Application, key: []const u8) []const u8 {
     return std.mem.span(c.lv_label_get_text(app.find(key).?));
 }
 
 test "sidebar visits every recipe and runtime source matches the active page" {
     var gallery = try cookbook.Gallery.init(a, io, cookbook.source_directory);
     defer gallery.deinit();
-    const app = try zui.App.create(a, &gallery, .{ .width = 1024, .height = 768 });
+    const app = try zui.Application.create(a, &gallery, .{ .width = 1024, .height = 768 });
     defer app.destroy();
     try app.flush();
     for (cookbook.recipes, 0..) |page, index| {
@@ -31,7 +31,7 @@ test "sidebar visits every recipe and runtime source matches the active page" {
         defer a.free(key);
         try click(app, key);
         try std.testing.expectEqual(index, gallery.selected.peek());
-        try std.testing.expect(c.lv_obj_has_state(app.find(key).?, c.LV_STATE_CHECKED));
+        try std.testing.expect(c.lv_color_eq(c.lv_obj_get_style_bg_color(app.find(key).?, c.LV_PART_MAIN), c.lv_color_hex(0x244b5a)));
         const filename = try a.print("{s}.zig", .{page.key});
         defer a.free(filename);
         try std.testing.expectEqualStrings(filename, text(app, "source-file"));
@@ -53,7 +53,7 @@ test "sidebar visits every recipe and runtime source matches the active page" {
 test "recipes bind native controls, preserve keys during reflow and retain model state on navigation" {
     var gallery = try cookbook.Gallery.init(a, io, cookbook.source_directory);
     defer gallery.deinit();
-    const app = try zui.App.create(a, &gallery, .{ .width = 1024, .height = 768 });
+    const app = try zui.Application.create(a, &gallery, .{ .width = 1024, .height = 768 });
     defer app.destroy();
     try app.flush();
     try click(app, "page:button");
@@ -99,7 +99,7 @@ test "external binding notifies both editors and bounds its setter log" {
     var gallery = try cookbook.Gallery.init(a, io, cookbook.source_directory);
     defer gallery.deinit();
     try gallery.selectKey("binding");
-    const app = try zui.App.create(a, &gallery, .{});
+    const app = try zui.Application.create(a, &gallery, .{});
     defer app.destroy();
     try app.flush();
     c.lv_textarea_set_text(app.find("binding-field").?, "native edit");
@@ -125,7 +125,7 @@ test "Reload reads disk changes and missing or invalid source stays recoverable"
     try temporary.dir.writeFile(io, .{ .sub_path = "vbox.zig", .data = "// first version\n" });
     var gallery = try cookbook.Gallery.init(a, io, directory);
     defer gallery.deinit();
-    const app = try zui.App.create(a, &gallery, .{});
+    const app = try zui.Application.create(a, &gallery, .{});
     defer app.destroy();
     try app.flush();
     try std.testing.expectEqualStrings("// first version\n", text(app, "source-code"));
@@ -147,7 +147,7 @@ test "Views recipe updates one counter and retains hidden pages and editor caret
     var gallery = try cookbook.Gallery.init(a, io, cookbook.source_directory);
     defer gallery.deinit();
     try gallery.selectKey("views");
-    const app = try zui.App.create(a, &gallery, .{});
+    const app = try zui.Application.create(a, &gallery, .{});
     defer app.destroy();
     try app.flush();
     const first = app.findView("view-a").?;

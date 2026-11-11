@@ -8,7 +8,7 @@ pub fn main() !void {
     const allocator = debug_allocator.allocator();
     var demo = try Demo.init(allocator);
     defer demo.deinit();
-    const app = try zui.App.create(allocator, &demo, .{});
+    const app = try zui.Application.create(allocator, &demo, .{});
     defer app.destroy();
     _ = try app.pump();
     try app.saveScreenshot(".build/demo.bmp");

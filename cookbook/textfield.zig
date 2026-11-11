@@ -2,13 +2,13 @@ const zui = @import("zui");
 const Model = @import("model.zig").Model;
 
 pub fn content(model: *Model, ui: *zui.Builder) void {
-    const row = ui.hbox();
-    _ = row.button("Clear").key("field-clear").onClick(zui.callback(model, clear));
-    _ = row.button("Set text").key("field-set").onClick(zui.callback(model, set));
-    _ = ui.labelFmt("State: {s}", .{model.field_text.get(ui)}).key("field-value").widthPercent(100);
-    _ = ui.textField(model.field_text.binding()).key("field-model");
-    _ = ui.label("A second editor shares the same binding.").widthPercent(100);
-    _ = ui.textField(model.field_text.binding()).key("field-mirror");
+    const row = ui.hbox(.{});
+    _ = row.button("Clear").id("field-clear").click(zui.callback(model, clear));
+    _ = row.button("Set text").id("field-set").click(zui.callback(model, set));
+    _ = ui.labelFmt("State: {s}", .{model.field_text.get(ui)}).id("field-value").layout(.{ .width_percent = 100 });
+    _ = ui.textField(model.field_text.binding()).id("field-model");
+    _ = ui.label("A second editor shares the same binding.").layout(.{ .width_percent = 100 });
+    _ = ui.textField(model.field_text.binding()).id("field-mirror");
 }
 
 fn clear(model: *Model) !void {

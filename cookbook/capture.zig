@@ -5,7 +5,7 @@ const cookbook = @import("cookbook");
 pub fn main(init: std.process.Init) !void {
     var gallery = try cookbook.Gallery.init(init.gpa, init.io, cookbook.source_directory);
     defer gallery.deinit();
-    const app = try zui.App.create(init.gpa, &gallery, .{
+    const app = try zui.Application.create(init.gpa, &gallery, .{
         .title = "Cookbook (LVGL SDL2)",
         .width = 1024,
         .height = 768,

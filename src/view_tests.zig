@@ -15,7 +15,7 @@ const Child = struct {
     pub fn content(self: *@This(), ui: *zui.Builder) void {
         self.calls += 1;
         const value = if (self.use_alternate) self.alternate.?.get(ui) else self.value.get(ui);
-        if (self.count > 0) _ = ui.labelFmt("{d}", .{value}).key(self.key);
+        if (self.count > 0) _ = ui.labelFmt("{d}", .{value}).id(self.key);
         for (1..@max(1, self.count)) |_| _ = ui.label("extra");
         if (self.fail) ui.fail(error.ChildFailed);
     }
@@ -28,15 +28,15 @@ const Parent = struct {
     calls: usize = 0,
     pub fn content(self: *@This(), ui: *zui.Builder) void {
         self.calls += 1;
-        const grid = ui.grid().key("grid").columns(2);
-        _ = grid.label("before").key("before");
-        if (self.reverse) _ = grid.view(self.second).key("second");
-        if (self.show) _ = grid.view(self.first).key("first");
-        if (!self.reverse) _ = grid.view(self.second).key("second");
-        _ = grid.label("after").key("after");
+        const grid = ui.grid(.{}).id("grid").columns(2);
+        _ = grid.label("before").id("before");
+        if (self.reverse) _ = grid.subView(self.second).id("second");
+        if (self.show) _ = grid.subView(self.first).id("first");
+        if (!self.reverse) _ = grid.subView(self.second).id("second");
+        _ = grid.label("after").id("after");
     }
 };
-fn label(app: *zui.App, key: []const u8) []const u8 {
+fn label(app: *zui.Application, key: []const u8) []const u8 {
     return std.mem.span(c.lv_label_get_text(app.find(key).?));
 }
 
@@ -48,7 +48,7 @@ test "subviews update independently and keyed moves retain native and View ident
     var first = Child{ .value = &x, .key = "x" };
     var second = Child{ .value = &y, .key = "y" };
     var parent = Parent{ .first = &first, .second = &second };
-    const app = try zui.App.create(a, &parent, .{});
+    const app = try zui.Application.create(a, &parent, .{});
     defer app.destroy();
     try app.flush();
     const view = app.findView("first").?;
@@ -91,7 +91,7 @@ test "failed sibling content rolls back the whole flush and dependency changes" 
     var first = Child{ .value = &x, .alternate = &y, .key = "x" };
     var second = Child{ .value = &x, .key = "y" };
     var parent = Parent{ .first = &first, .second = &second };
-    const app = try zui.App.create(a, &parent, .{});
+    const app = try zui.Application.create(a, &parent, .{});
     defer app.destroy();
     try app.flush();
     try std.testing.expectEqual(2, x.signal.observers.items.len);
@@ -122,7 +122,7 @@ test "virtual children flatten empty and multiple roots and reflow a clean paren
     var first = Child{ .value = &value, .key = "x", .count = 0 };
     var second = Child{ .value = &value, .key = "y", .count = 3 };
     var parent = Parent{ .first = &first, .second = &second };
-    const app = try zui.App.create(a, &parent, .{});
+    const app = try zui.Application.create(a, &parent, .{});
     defer app.destroy();
     try app.flush();
     const grid = app.find("grid").?;
@@ -153,7 +153,7 @@ test "changing a keyed View model replaces subscriptions and native deletion dir
     var replacement = Child{ .value = &y, .key = "replacement" };
     var second = Child{ .value = &y, .key = "y" };
     var parent = Parent{ .first = &first, .second = &second };
-    const app = try zui.App.create(a, &parent, .{});
+    const app = try zui.Application.create(a, &parent, .{});
     defer app.destroy();
     try app.flush();
     c.lv_obj_delete(app.find("x").?);
@@ -183,16 +183,16 @@ test "visibility retains controls, caret and subscriptions while if removes them
         present: bool = true,
         pub fn content(self: *@This(), ui: *zui.Builder) void {
             if (self.present) {
-                const box = ui.vbox().key("box").visible(self.visible.get(ui));
-                _ = box.textField(self.text.binding()).key("editor");
+                const box = ui.vbox(.{}).id("box").visible(self.visible.get(ui));
+                _ = box.textField(self.text.binding()).id("editor");
             }
-            _ = ui.label("after").key("after");
+            _ = ui.label("after").id("after");
         }
     };
     var model = Model{ .visible = zui.State(bool).init(a, true), .text = try zui.TextState.init(a, "hello") };
     defer model.visible.deinit();
     defer model.text.deinit();
-    const app = try zui.App.create(a, &model, .{});
+    const app = try zui.Application.create(a, &model, .{});
     defer app.destroy();
     try app.flush();
     const box = app.find("box").?;
@@ -225,7 +225,7 @@ fn allocationScenario(allocator: std.mem.Allocator) !void {
     var first = Child{ .value = &value, .key = "x" };
     var second = Child{ .value = &value, .key = "y" };
     var parent = Parent{ .first = &first, .second = &second };
-    const app = try zui.App.create(allocator, &parent, .{});
+    const app = try zui.Application.create(allocator, &parent, .{});
     defer app.destroy();
     try app.flush();
     first.count = 3;
@@ -250,13 +250,13 @@ test "nested Views sharing a Signal commit all subscriptions before independent 
         children: [12]Child,
         pub fn content(self: *@This(), ui: *zui.Builder) void {
             _ = ui.labelFmt("root {d}", .{self.value.get(ui)});
-            for (&self.children) |*child| _ = ui.view(child);
+            for (&self.children) |*child| _ = ui.subView(child);
         }
     };
     const Root = struct {
         branch: *Branch,
         pub fn content(self: *@This(), ui: *zui.Builder) void {
-            _ = ui.view(self.branch).key("branch");
+            _ = ui.subView(self.branch).id("branch");
         }
     };
     var value = zui.State(i32).init(a, 1);
@@ -264,7 +264,7 @@ test "nested Views sharing a Signal commit all subscriptions before independent 
     var branch = Branch{ .value = &value, .children = undefined };
     for (&branch.children) |*child| child.* = .{ .value = &value, .key = "value" };
     var root = Root{ .branch = &branch };
-    const app = try zui.App.create(a, &root, .{});
+    const app = try zui.Application.create(a, &root, .{});
     defer app.destroy();
     try app.flush();
     try std.testing.expectEqual(13, value.signal.observers.items.len);

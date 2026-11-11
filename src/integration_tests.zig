@@ -15,7 +15,7 @@ const Model = struct {
     fail: bool = false,
     mutate: bool = false,
     duplicate: bool = false,
-    app: ?*zui.App = null,
+    app: ?*zui.Application = null,
     reentrant_rejected: bool = false,
 
     fn init(allocator: std.mem.Allocator) !Model {
@@ -35,27 +35,27 @@ const Model = struct {
         self.count.deinit();
     }
     pub fn content(self: *Model, ui: *zui.Builder) !void {
-        const box = ui.vbox().key("main").padding(12);
+        const box = ui.vbox(.{}).id("main").layout(.{ .padding = 12 });
         const value = if (self.use_alternate) self.alternate.get(ui) else self.count.get(ui);
-        _ = box.labelFmt("Count: {d}", .{value}).key("count");
+        _ = box.labelFmt("Count: {d}", .{value}).id("count");
         if (self.mutate) try self.count.set(42);
         if (self.fail) return error.BuilderFailed;
-        if (self.duplicate) _ = box.label("duplicate").key("count");
-        _ = box.button("+").key("increment").onClick(zui.callback(self, increment));
-        _ = box.checkbox("Enabled", self.checked.binding()).key("check");
-        _ = box.textField(self.text.binding()).key("text");
+        if (self.duplicate) _ = box.label("duplicate").id("count");
+        _ = box.button("+").id("increment").click(zui.callback(self, increment));
+        _ = box.checkbox("Enabled", self.checked.binding()).id("check");
+        _ = box.textField(self.text.binding()).id("text");
         if (self.show.get(ui))
-            _ = box.button("Remove me").key("remove").onClick(zui.callback(self, remove));
-        const list = box.hbox().key("items");
+            _ = box.button("Remove me").id("remove").click(zui.callback(self, remove));
+        const list = box.hbox(.{}).id("items");
         const keys = [_][]const u8{ "a", "b", "c" };
         for (0..self.length) |index| {
             const i = if (self.reversed) self.length - 1 - index else index;
-            _ = list.label(keys[i]).key(keys[i]);
+            _ = list.label(keys[i]).id(keys[i]);
         }
-        const grid = box.grid().key("grid").columns(2);
+        const grid = box.grid(.{}).id("grid").columns(2);
         _ = grid.label("first");
         _ = grid.label("second");
-        const scroll = box.scroll().key("scroll").height(60);
+        const scroll = box.scroll(.{}).id("scroll").layout(.{ .height = 60 });
         _ = scroll.label("scroll content");
     }
     fn increment(self: *Model) !void {
@@ -79,7 +79,7 @@ fn click(object: *c.lv_obj_t) void {
 test "native events update State, batch renders and safely remove their own control" {
     var model = try Model.init(a);
     defer model.deinit();
-    const app = try zui.App.create(a, &model, .{});
+    const app = try zui.Application.create(a, &model, .{});
     defer app.destroy();
     model.app = app;
     try app.flush();
@@ -101,7 +101,7 @@ test "native events update State, batch renders and safely remove their own cont
 test "checkbox and editable text bind both ways without resetting the caret" {
     var model = try Model.init(a);
     defer model.deinit();
-    const app = try zui.App.create(a, &model, .{});
+    const app = try zui.Application.create(a, &model, .{});
     defer app.destroy();
     try app.flush();
     const checkbox = app.find("check").?;
@@ -126,7 +126,7 @@ test "checkbox and editable text bind both ways without resetting the caret" {
 test "keyed reorder and removal preserve native identities and physical order" {
     var model = try Model.init(a);
     defer model.deinit();
-    const app = try zui.App.create(a, &model, .{});
+    const app = try zui.Application.create(a, &model, .{});
     defer app.destroy();
     try app.flush();
     const first = app.find("a").?;
@@ -149,7 +149,7 @@ test "keyed reorder and removal preserve native identities and physical order" {
 test "builder errors preserve the old tree and subscriptions and allow retry" {
     var model = try Model.init(a);
     defer model.deinit();
-    const app = try zui.App.create(a, &model, .{});
+    const app = try zui.Application.create(a, &model, .{});
     defer app.destroy();
     try app.flush();
     const old = app.find("count").?;
@@ -168,7 +168,7 @@ test "builder errors preserve the old tree and subscriptions and allow retry" {
     try std.testing.expectEqual(1, model.count.peek());
     model.mutate = false;
     model.duplicate = true;
-    try std.testing.expectError(error.DuplicateKey, app.flush());
+    try std.testing.expectError(error.DuplicateId, app.flush());
     model.duplicate = false;
     model.use_alternate = true;
     try app.flush();
@@ -190,11 +190,11 @@ test "void content runs to completion before deferred errors reject the tree and
         pub fn content(self: *@This(), ui: *zui.Builder) void {
             self.completed = false;
             const value = if (self.fail) self.alternate.get(ui) else self.first.get(ui);
-            _ = ui.labelFmt("Value: {d}", .{value}).key("value");
+            _ = ui.labelFmt("Value: {d}", .{value}).id("value");
             if (self.fail) {
-                _ = ui.button("Duplicate").key("value");
-                const invalid = ui.grid().columns(0);
-                const nested = invalid.vbox();
+                _ = ui.button("Duplicate").id("value");
+                const invalid = ui.grid(.{}).columns(0);
+                const nested = invalid.vbox(.{});
                 _ = nested.label("Ignored");
                 ui.fail(error.LaterError);
             }
@@ -207,14 +207,14 @@ test "void content runs to completion before deferred errors reject the tree and
     };
     defer model.first.deinit();
     defer model.alternate.deinit();
-    const app = try zui.App.create(a, &model, .{});
+    const app = try zui.Application.create(a, &model, .{});
     defer app.destroy();
     try app.flush();
     const original = app.find("value").?;
     model.fail = true;
     model.completed = false;
     app.invalidate();
-    try std.testing.expectError(error.DuplicateKey, app.flush());
+    try std.testing.expectError(error.DuplicateId, app.flush());
     try std.testing.expect(model.completed);
     try std.testing.expectEqual(1, app.render_count);
     try std.testing.expectEqual(original, app.find("value").?);
@@ -237,7 +237,7 @@ test "fallible content shares the deferred boundary without replacing an earlier
         }
     };
     var model = Fallible{};
-    const app = try zui.App.create(a, &model, .{});
+    const app = try zui.Application.create(a, &model, .{});
     defer app.destroy();
     try std.testing.expectError(error.ModelFailed, app.flush());
     model.declaration_error = true;
@@ -248,7 +248,7 @@ test "fallible content shares the deferred boundary without replacing an earlier
 test "externally deleted containers and root are rebuilt and SDL quit is deferred" {
     var model = try Model.init(a);
     defer model.deinit();
-    const app = try zui.App.create(a, &model, .{});
+    const app = try zui.Application.create(a, &model, .{});
     defer app.destroy();
     try app.flush();
     c.lv_obj_delete(app.find("items").?);
@@ -259,7 +259,7 @@ test "externally deleted containers and root are rebuilt and SDL quit is deferre
     try std.testing.expect(app.find("count") != null);
     c.zui_host_push_quit();
     try std.testing.expect(!(try app.pump()));
-    // Native objects must remain alive until App.destroy detaches its callbacks.
+    // Native objects must remain alive until Application.destroy detaches its callbacks.
     try std.testing.expect(c.lv_is_initialized());
     try std.testing.expect(c.lv_obj_is_valid(app.find("count").?));
 }
@@ -267,7 +267,7 @@ test "externally deleted containers and root are rebuilt and SDL quit is deferre
 fn allocationScenario(allocator: std.mem.Allocator) !void {
     var model = try Model.init(allocator);
     defer model.deinit();
-    const app = try zui.App.create(allocator, &model, .{});
+    const app = try zui.Application.create(allocator, &model, .{});
     defer app.destroy();
     model.length = 1;
     try app.flush();
@@ -291,21 +291,21 @@ test "splitter resizes retained panes, clamps keyboard input and rejects missing
         vertical: bool = false,
         missing: bool = false,
         pub fn content(self: *@This(), ui: *zui.Builder) !void {
-            const panes = ui.splitter(self.ratio.binding())
-                .key("panes")
-                .heightPercent(100)
-                .vertical(self.vertical);
-            const left = panes.vbox().key("left");
+            const panes = ui.splitter(.{ .vertical = self.vertical })
+                .id("panes")
+                .ratio(self.ratio.binding())
+                .layout(.{ .height_percent = 100 });
+            const left = panes.vbox(.{}).id("left");
             _ = left.label("Code");
             if (!self.missing) {
-                const right = panes.vbox().key("right");
+                const right = panes.vbox(.{}).id("right");
                 _ = right.label("Result");
             }
         }
     };
     var model = Split{ .ratio = zui.State(u8).init(a, 50) };
     defer model.ratio.deinit();
-    const app = try zui.App.create(a, &model, .{ .width = 800, .height = 600 });
+    const app = try zui.Application.create(a, &model, .{ .width = 800, .height = 600 });
     defer app.destroy();
     try app.flush();
     const panes = app.find("panes").?;

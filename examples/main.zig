@@ -38,36 +38,36 @@ pub const Demo = struct {
         self.count.deinit();
     }
     pub fn content(self: *Demo, ui: *zui.Builder) void {
-        const page = ui.vbox().key("page").padding(20).gap(16);
+        const page = ui.vbox(.{ .gap = 16 }).id("page").layout(.{ .padding = 20 });
         _ = page.label("ZUI / Zig + LVGL");
-        const counter = page.hbox();
-        _ = counter.button("-").key("decrement").onClick(zui.callback(self, decrement));
-        _ = counter.labelFmt("Count: {d}", .{self.count.get(ui)}).key("count").width(140);
-        _ = counter.button("+").key("increment").onClick(zui.callback(self, increment));
+        const counter = page.hbox(.{});
+        _ = counter.button("-").id("decrement").click(zui.callback(self, decrement));
+        _ = counter.labelFmt("Count: {d}", .{self.count.get(ui)}).id("count").layout(.{ .width = 140 });
+        _ = counter.button("+").id("increment").click(zui.callback(self, increment));
 
-        _ = page.checkbox("Show greeting", self.show.binding()).key("show");
-        const form = page.grid().columns(2);
+        _ = page.checkbox("Show greeting", self.show.binding()).id("show");
+        const form = page.grid(.{}).columns(2);
         _ = form.label("Your name");
-        _ = form.textField(self.name.binding()).key("name");
+        _ = form.textField(self.name.binding()).id("name");
         if (self.show.get(ui))
-            _ = page.labelFmt("Hello, {s}!", .{self.name.get(ui)}).key("greeting");
+            _ = page.labelFmt("Hello, {s}!", .{self.name.get(ui)}).id("greeting");
 
         const length = self.length.get(ui);
         const reversed = self.reversed.get(ui);
-        const actions = page.hbox();
-        _ = actions.button("Add row").key("add").disabled(length == keys.len).onClick(zui.callback(self, add));
+        const actions = page.hbox(.{});
+        _ = actions.button("Add row").id("add").disabled(length == keys.len).click(zui.callback(self, add));
         _ = actions.button("Remove row")
-            .key("remove")
+            .id("remove")
             .disabled(length == 0)
-            .onClick(zui.callback(self, remove));
-        _ = actions.button("Reverse").key("reverse").onClick(zui.callback(self, reverse));
+            .click(zui.callback(self, remove));
+        _ = actions.button("Reverse").id("reverse").click(zui.callback(self, reverse));
         _ = page.label("Edit a row, then reverse: the same editor is retained.");
-        const list = page.scroll().key("list").height(210).gap(10);
+        const list = page.scroll(.{}).id("list").layout(.{ .height = 210 });
         for (0..length) |index| {
             const i = if (reversed) length - 1 - index else index;
-            const row = list.hbox().key(keys[i]);
-            _ = row.labelFmt("Row {d}", .{i + 1}).width(100);
-            _ = row.textField(self.items[i].binding()).width(360);
+            const row = list.hbox(.{}).id(keys[i]);
+            _ = row.labelFmt("Row {d}", .{i + 1}).layout(.{ .width = 100 });
+            _ = row.textField(self.items[i].binding()).layout(.{ .width = 360 });
         }
     }
     fn increment(self: *Demo) !void {
@@ -93,7 +93,7 @@ pub fn main() !void {
     const allocator = debug_allocator.allocator();
     var demo = try Demo.init(allocator);
     defer demo.deinit();
-    const app = try zui.App.create(allocator, &demo, .{ .title = "ZUI — Counter, Form and Keyed List" });
+    const app = try zui.Application.create(allocator, &demo, .{ .title = "ZUI — Counter, Form and Keyed List" });
     defer app.destroy();
     try app.run();
 }
@@ -101,7 +101,7 @@ pub fn main() !void {
 test "the complete demo renders, edits and reorders actual LVGL controls" {
     var demo = try Demo.init(std.testing.allocator);
     defer demo.deinit();
-    const app = try zui.App.create(std.testing.allocator, &demo, .{});
+    const app = try zui.Application.create(std.testing.allocator, &demo, .{});
     defer app.destroy();
     try std.testing.expect(try app.pump());
     _ = c.lv_obj_send_event(app.find("increment").?, c.LV_EVENT_CLICKED, null);

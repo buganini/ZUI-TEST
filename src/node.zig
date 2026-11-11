@@ -18,26 +18,71 @@ pub fn callback(context: anytype, comptime function: anytype) Callback {
     }.invoke };
 }
 
-pub const Kind = enum { view, root, column, row, grid, scroll, splitter, label, button, checkbox, text_field };
+pub const Kind = enum { view, root, column, row, grid, scroll, splitter, spacer, divider, label, button, checkbox, text_field };
+
+/// Default spacing between container children, matching PUI and CPPUI.
+pub const default_gap: i32 = 10;
+
+/// `.layout()` arguments, mirroring PUI's `layout(width, height, weight, padding)`.
+/// Omitted fields keep their previous value. Percentages are a ZUI extension;
+/// a pixel size and a percentage replace each other on the same axis.
+pub const Layout = struct {
+    width: ?i32 = null,
+    height: ?i32 = null,
+    weight: ?u8 = null,
+    padding: ?i32 = null,
+    width_percent: ?u8 = null,
+    height_percent: ?u8 = null,
+};
+
+/// `.style()` arguments, mirroring PUI's `style(color, bgColor, fontSize)`.
+/// Omitted fields keep their previous value. Containers pass text styles on.
+pub const Style = struct {
+    color: ?u32 = null,
+    bg_color: ?u32 = null,
+    font_size: ?u8 = null,
+};
+
+/// `HBox(inverse, gap)` / `VBox(inverse, gap)`.
+pub const BoxOptions = struct {
+    inverse: bool = false,
+    gap: i32 = default_gap,
+};
+/// `Grid(gap)`.
+pub const GridOptions = struct {
+    gap: i32 = default_gap,
+};
+/// `Scroll(vertical, horizontal)`: null lets content decide, like PUI.
+pub const ScrollOptions = struct {
+    vertical: ?bool = null,
+    horizontal: ?bool = false,
+};
+/// `Splitter(vertical)`.
+pub const SplitterOptions = struct {
+    vertical: bool = false,
+};
 
 pub const Options = struct {
-    key: ?[]const u8 = null,
+    id: ?[]const u8 = null,
     width: ?i32 = null,
     height: ?i32 = null,
     width_percent: ?u8 = null,
     height_percent: ?u8 = null,
     padding: i32 = 0,
-    gap: i32 = 8,
-    grow: u8 = 0,
+    gap: i32 = default_gap,
+    weight: u8 = 0,
+    inverse: bool = false,
     /// Hide without removing the retained node or its native control.
     visible: bool = true,
     disabled: bool = false,
-    selected: bool = false,
     vertical: bool = false,
-    text_color: ?u32 = null,
-    background: ?u32 = null,
-    small_text: bool = false,
+    scroll_vertical: ?bool = null,
+    scroll_horizontal: ?bool = false,
+    color: ?u32 = null,
+    bg_color: ?u32 = null,
+    font_size: ?u8 = null,
     columns: u16 = 2,
+    placeholder: ?[:0]const u8 = null,
     on_click: ?Callback = null,
 };
 
@@ -55,7 +100,7 @@ pub const Node = struct {
     children: std.ArrayListUnmanaged(*Node) = std.ArrayListUnmanaged(*Node).empty,
 };
 
-/// Each render owns its declarations, copied keys, copied text and dependencies.
+/// Each render owns its declarations, copied ids, copied text and dependencies.
 /// Kept alive until the next successful commit; failed builds discard it whole.
 pub const Snapshot = struct {
     allocator: Allocator,
@@ -132,152 +177,188 @@ pub const Builder = struct {
         const node = self.addFallible(kind, text) catch |err| return self.reject(err);
         return .{ .snapshot = self.snapshot, .parent = node };
     }
+    fn copyText(self: Builder, text: []const u8) ![:0]const u8 {
+        if (std.mem.indexOfScalar(u8, text, 0) != null) return error.EmbeddedNul;
+        const copy = try self.snapshot.arena.allocator().allocSentinel(u8, text.len, 0);
+        @memcpy(copy, text);
+        return copy;
+    }
     fn addFallible(self: Builder, kind: Kind, text: []const u8) !*Node {
         switch (self.parent.?.kind) {
             .root, .column, .row, .grid, .scroll, .splitter => {},
             else => return error.InvalidParent,
         }
-        if (std.mem.indexOfScalar(u8, text, 0) != null) return error.EmbeddedNul;
+        const copied_text = try self.copyText(text);
         const allocator = self.snapshot.arena.allocator();
         const node = try allocator.create(Node);
-        const copied_text = try allocator.allocSentinel(u8, text.len, 0);
-        @memcpy(copied_text, text);
         node.* = .{ .parent = self.parent, .kind = kind, .options = .{}, .text = copied_text };
         try self.parent.?.children.append(allocator, node);
         return node;
     }
 
-    /// Copy the key into the snapshot; identity remains unique among siblings.
-    pub fn key(self: Builder, value: []const u8) Builder {
+    /// Copy the id into the snapshot; identity remains unique among siblings.
+    pub fn id(self: Builder, value: []const u8) Builder {
         if (!self.active()) return self.inert();
-        if (value.len == 0) return self.reject(error.EmptyKey);
+        if (value.len == 0) return self.reject(error.EmptyId);
         const node = self.parent.?;
         const parent = node.parent orelse return self.reject(error.InvalidRootModifier);
         for (parent.children.items) |sibling| {
             if (sibling == node) continue;
-            if (sibling.options.key) |other| {
-                if (std.mem.eql(u8, value, other)) return self.reject(error.DuplicateKey);
+            if (sibling.options.id) |other| {
+                if (std.mem.eql(u8, value, other)) return self.reject(error.DuplicateId);
             }
         }
         const copy = self.snapshot.arena.allocator().dupe(u8, value) catch |err| return self.reject(err);
-        node.options.key = copy;
+        node.options.id = copy;
         return self;
     }
-    fn option(self: Builder, comptime field: []const u8, value: anytype) Builder {
-        if (!self.active()) return self.inert();
+    /// The node being configured, or null after a failure. Rejects the root
+    /// and virtual Views, which have no native control to configure.
+    fn physical(self: Builder) ?*Node {
+        if (!self.active()) return null;
         const node = self.parent.?;
-        if (node.kind == .root) return self.reject(error.InvalidRootModifier);
-        if (node.kind == .view) return self.reject(error.InvalidViewModifier);
-        if (comptime std.mem.eql(u8, field, "width") or std.mem.eql(u8, field, "height") or
-            std.mem.eql(u8, field, "padding") or std.mem.eql(u8, field, "gap"))
-        {
-            if (value < 0) return self.reject(error.InvalidLayout);
+        if (node.kind == .root) {
+            self.fail(error.InvalidRootModifier);
+            return null;
         }
-        if (comptime std.mem.eql(u8, field, "width_percent") or std.mem.eql(u8, field, "height_percent")) {
-            if (value > 100) return self.reject(error.InvalidLayout);
+        if (node.kind == .view) {
+            self.fail(error.InvalidViewModifier);
+            return null;
         }
-        if (comptime std.mem.eql(u8, field, "columns")) {
-            if (node.kind != .grid) return self.reject(error.InvalidModifier);
-            if (value == 0) return self.reject(error.InvalidLayout);
+        return node;
+    }
+    /// Set only the given fields. A pixel size clears that axis's percentage
+    /// and vice versa; if both are given, the percentage wins.
+    pub fn layout(self: Builder, value: Layout) Builder {
+        const node = self.physical() orelse return self.inert();
+        inline for (.{ value.width, value.height, value.padding }) |field| {
+            if (field) |pixels| if (pixels < 0) return self.reject(error.InvalidLayout);
         }
-        if (comptime std.mem.eql(u8, field, "vertical")) {
-            if (node.kind != .splitter) return self.reject(error.InvalidModifier);
+        inline for (.{ value.width_percent, value.height_percent }) |field| {
+            if (field) |percent| if (percent > 100) return self.reject(error.InvalidLayout);
         }
-        if (comptime std.mem.eql(u8, field, "on_click")) {
-            if (node.kind != .button) return self.reject(error.InvalidModifier);
+        const options = &node.options;
+        if (value.width) |pixels| {
+            options.width = pixels;
+            options.width_percent = null;
         }
-        @field(node.options, field) = value;
+        if (value.height) |pixels| {
+            options.height = pixels;
+            options.height_percent = null;
+        }
+        if (value.width_percent) |percent| {
+            options.width_percent = percent;
+            options.width = null;
+        }
+        if (value.height_percent) |percent| {
+            options.height_percent = percent;
+            options.height = null;
+        }
+        if (value.weight) |weight| options.weight = weight;
+        if (value.padding) |padding| options.padding = padding;
         return self;
     }
-    /// Pixel and percentage sizes replace each other on the same axis.
-    pub fn width(self: Builder, value: i32) Builder {
-        const next = self.option("width", value);
-        if (next.active()) next.parent.?.options.width_percent = null;
-        return next;
-    }
-    pub fn height(self: Builder, value: i32) Builder {
-        const next = self.option("height", value);
-        if (next.active()) next.parent.?.options.height_percent = null;
-        return next;
-    }
-    pub fn widthPercent(self: Builder, value: u8) Builder {
-        const next = self.option("width_percent", value);
-        if (next.active()) next.parent.?.options.width = null;
-        return next;
-    }
-    pub fn heightPercent(self: Builder, value: u8) Builder {
-        const next = self.option("height_percent", value);
-        if (next.active()) next.parent.?.options.height = null;
-        return next;
-    }
-    pub fn padding(self: Builder, value: i32) Builder {
-        return self.option("padding", value);
-    }
-    pub fn gap(self: Builder, value: i32) Builder {
-        return self.option("gap", value);
-    }
-    pub fn grow(self: Builder, value: u8) Builder {
-        return self.option("grow", value);
+    /// Set only the given fields; color and font size are inherited by children.
+    pub fn style(self: Builder, value: Style) Builder {
+        const node = self.physical() orelse return self.inert();
+        if (value.font_size) |size| if (size == 0) return self.reject(error.InvalidStyle);
+        if (value.color) |color| node.options.color = color;
+        if (value.bg_color) |color| node.options.bg_color = color;
+        if (value.font_size) |size| node.options.font_size = size;
+        return self;
     }
     pub fn visible(self: Builder, value: bool) Builder {
-        return self.option("visible", value);
+        const node = self.physical() orelse return self.inert();
+        node.options.visible = value;
+        return self;
     }
     pub fn disabled(self: Builder, value: bool) Builder {
-        return self.option("disabled", value);
+        const node = self.physical() orelse return self.inert();
+        node.options.disabled = value;
+        return self;
     }
-    pub fn selected(self: Builder, value: bool) Builder {
-        return self.option("selected", value);
-    }
-    pub fn vertical(self: Builder, value: bool) Builder {
-        return self.option("vertical", value);
-    }
-    pub fn textColor(self: Builder, value: u32) Builder {
-        return self.option("text_color", value);
-    }
-    pub fn background(self: Builder, value: u32) Builder {
-        return self.option("background", value);
-    }
-    pub fn smallText(self: Builder, value: bool) Builder {
-        return self.option("small_text", value);
-    }
+    /// Grid column count for automatic placement.
     pub fn columns(self: Builder, value: u16) Builder {
-        return self.option("columns", value);
+        const node = self.physical() orelse return self.inert();
+        if (node.kind != .grid) return self.reject(error.InvalidModifier);
+        if (value == 0) return self.reject(error.InvalidLayout);
+        node.options.columns = value;
+        return self;
     }
-    pub fn onClick(self: Builder, value: Callback) Builder {
-        return self.option("on_click", value);
+    /// Bind a splitter's first-pane percentage, clamped to 10..90. Without a
+    /// binding, the splitter keeps its own ratio, as in PUI and CPPUI.
+    pub fn ratio(self: Builder, binding: Binding(u8)) Builder {
+        const node = self.physical() orelse return self.inert();
+        if (node.kind != .splitter) return self.reject(error.InvalidModifier);
+        node.split_binding = binding;
+        node.split_ratio = std.math.clamp(binding.get(self), 10, 90);
+        return self;
+    }
+    pub fn placeholder(self: Builder, text: []const u8) Builder {
+        const node = self.physical() orelse return self.inert();
+        if (node.kind != .text_field) return self.reject(error.InvalidModifier);
+        node.options.placeholder = self.copyText(text) catch |err| return self.reject(err);
+        return self;
+    }
+    /// Buttons and labels accept click callbacks.
+    pub fn click(self: Builder, value: Callback) Builder {
+        const node = self.physical() orelse return self.inert();
+        if (node.kind != .button and node.kind != .label) return self.reject(error.InvalidModifier);
+        node.options.on_click = value;
+        return self;
     }
 
-    /// A virtual subtree with its own subscriptions. Only key() applies to a
-    /// virtual View; configure layout and visibility on its physical container.
-    /// The borrowed model must remain at a stable address until removal.
-    pub fn view(self: Builder, model: anytype) Builder {
+    /// A virtual subtree with its own subscriptions, like CPPUI's SubView.
+    /// Only id() applies; configure layout and visibility on its physical
+    /// container. The borrowed model must remain at a stable address until removal.
+    pub fn subView(self: Builder, model: anytype) Builder {
         const child = self.add(.view, "");
         if (child.parent) |node| node.content = @import("view.zig").Content.init(model);
         return child;
     }
-    pub fn vbox(self: Builder) Builder {
-        return self.add(.column, "");
-    }
-    pub fn hbox(self: Builder) Builder {
-        return self.add(.row, "");
-    }
-    pub fn scroll(self: Builder) Builder {
-        return self.add(.scroll, "");
-    }
-    pub fn grid(self: Builder) Builder {
-        return self.add(.grid, "");
-    }
-    /// Exactly two child panes. Ratio is a percentage, clamped to 10..90.
-    /// Drag the divider or focus it and use the arrow keys to resize.
-    pub fn splitter(self: Builder, ratio: Binding(u8)) Builder {
-        if (!self.active()) return self.inert();
-        const value = ratio.get(self);
-        const panes = self.add(.splitter, "");
-        if (panes.parent) |node| {
-            node.split_binding = ratio;
-            node.split_ratio = std.math.clamp(value, 10, 90);
+    fn box(self: Builder, kind: Kind, options: BoxOptions) Builder {
+        if (options.gap < 0) return self.reject(error.InvalidLayout);
+        const child = self.add(kind, "");
+        if (child.parent) |node| {
+            node.options.inverse = options.inverse;
+            node.options.gap = options.gap;
         }
-        return panes;
+        return child;
+    }
+    pub fn vbox(self: Builder, options: BoxOptions) Builder {
+        return self.box(.column, options);
+    }
+    pub fn hbox(self: Builder, options: BoxOptions) Builder {
+        return self.box(.row, options);
+    }
+    pub fn scroll(self: Builder, options: ScrollOptions) Builder {
+        const child = self.add(.scroll, "");
+        if (child.parent) |node| {
+            node.options.scroll_vertical = options.vertical;
+            node.options.scroll_horizontal = options.horizontal;
+        }
+        return child;
+    }
+    pub fn grid(self: Builder, options: GridOptions) Builder {
+        if (options.gap < 0) return self.reject(error.InvalidLayout);
+        const child = self.add(.grid, "");
+        if (child.parent) |node| node.options.gap = options.gap;
+        return child;
+    }
+    /// Exactly two child panes. Drag the divider or focus it and use the arrow
+    /// keys to resize; use .ratio() to bind the split percentage.
+    pub fn splitter(self: Builder, options: SplitterOptions) Builder {
+        const child = self.add(.splitter, "");
+        if (child.parent) |node| node.options.vertical = options.vertical;
+        return child;
+    }
+    /// Takes the remaining space along its HBox/VBox axis.
+    pub fn spacer(self: Builder) Builder {
+        return self.add(.spacer, "");
+    }
+    /// A thin separator line across its HBox/VBox axis.
+    pub fn divider(self: Builder) Builder {
+        return self.add(.divider, "");
     }
     pub fn label(self: Builder, text: []const u8) Builder {
         return self.add(.label, text);
@@ -316,7 +397,7 @@ pub fn sameIdentity(old: *const Node, next: *const Node, old_index: usize, next_
         const b = next.content.?;
         if (a.context != b.context or !std.mem.eql(u8, a.type_name, b.type_name)) return false;
     }
-    if (next.options.key) |key|
-        return if (old.options.key) |other| std.mem.eql(u8, key, other) else false;
-    return old.options.key == null and old_index == next_index;
+    if (next.options.id) |name|
+        return if (old.options.id) |other| std.mem.eql(u8, name, other) else false;
+    return old.options.id == null and old_index == next_index;
 }

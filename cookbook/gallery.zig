@@ -58,61 +58,53 @@ pub const Gallery = struct {
     pub fn content(self: *Gallery, ui: *zui.Builder) void {
         const selected = self.selected.get(ui);
         const page = recipes[selected];
-        const gallery = ui.hbox().key("gallery").heightPercent(100).padding(16).gap(16);
-        const sidebar = gallery.vbox().key("menu").width(180).heightPercent(100).gap(12);
+        const gallery = ui.hbox(.{ .gap = 16 }).id("gallery").layout(.{ .height_percent = 100, .padding = 16 });
+        const sidebar = gallery.vbox(.{ .gap = 12 }).id("menu").layout(.{ .width = 180, .height_percent = 100 });
         _ = sidebar.label("Cookbook");
-        _ = sidebar.label("ZUI / LVGL SDL2").smallText(true).textColor(0x526475);
+        _ = sidebar.label("ZUI / LVGL SDL2").style(.{ .font_size = 12, .color = 0x526475 });
         _ = sidebar.label("Examples");
-        const menu = sidebar.scroll().key("menu-scroller").height(0).grow(1).gap(6);
+        const menu = sidebar.scroll(.{}).id("menu-scroller").layout(.{ .height = 0, .weight = 1 })
+            .vbox(.{ .gap = 6 });
         inline for (recipes, 0..) |recipe, index| {
             _ = menu.button(recipe.title)
-                .key("page:" ++ recipe.key)
-                .widthPercent(100)
-                .height(32)
-                .smallText(true)
-                .selected(selected == index)
-                .background(if (selected == index) 0x244b5a else 0xecf0f3)
-                .textColor(if (selected == index) 0xffffff else 0x283548)
-                .onClick(zui.callback(self, struct {
+                .id("page:" ++ recipe.key)
+                .layout(.{ .width_percent = 100, .height = 32 })
+                .style(.{ .font_size = 12, .bg_color = if (selected == index) 0x244b5a else 0xecf0f3, .color = if (selected == index) 0xffffff else 0x283548 })
+                .click(zui.callback(self, struct {
                 fn activate(g: *Gallery) !void {
                     try g.select(index);
                 }
             }.activate));
         }
-        const panes = gallery.splitter(self.ratio.binding())
-            .key("example-panes")
-            .width(0)
-            .grow(1)
-            .heightPercent(100);
-        const code = panes.vbox().key("code").gap(10);
-        const heading = code.hbox().height(38);
-        _ = heading.label("Code").width(0).grow(1);
-        _ = heading.button("Reload").key("reload").onClick(zui.callback(self, reload));
-        _ = code.labelFmt("{s}.zig", .{page.key}).key("source-file").smallText(true);
+        const panes = gallery.splitter(.{})
+            .id("example-panes")
+            .ratio(self.ratio.binding())
+            .layout(.{ .width = 0, .weight = 1, .height_percent = 100 });
+        const code = panes.vbox(.{ .gap = 10 }).id("code");
+        const heading = code.hbox(.{}).layout(.{ .height = 38 });
+        _ = heading.label("Code").layout(.{ .width = 0, .weight = 1 });
+        _ = heading.button("Reload").id("reload").click(zui.callback(self, reload));
+        _ = code.labelFmt("{s}.zig", .{page.key}).id("source-file").style(.{ .font_size = 12 });
         // Changing the key resets source scroll position on recipe navigation.
-        const scroller = code.scroll()
-            .key(page.key)
-            .height(0)
-            .grow(1)
-            .padding(12)
-            .background(0x272822)
-            .textColor(0xf8f8f2)
-            .smallText(true);
-        _ = scroller.label(self.source_text.get(ui)).key("source-code");
-        const result = panes.vbox().key("result").gap(10);
-        _ = result.label("Result").height(38);
-        _ = result.labelFmt("{s}  /  {s}", .{ page.title, page.status() }).smallText(true).widthPercent(100);
-        var body = result.scroll().key(page.key).height(0).grow(1).gap(12);
+        const scroller = code.scroll(.{})
+            .id(page.key)
+            .layout(.{ .height = 0, .weight = 1, .padding = 12 })
+            .style(.{ .bg_color = 0x272822, .color = 0xf8f8f2, .font_size = 12 });
+        _ = scroller.label(self.source_text.get(ui)).id("source-code");
+        const result = panes.vbox(.{ .gap = 10 }).id("result");
+        _ = result.label("Result").layout(.{ .height = 38 });
+        _ = result.labelFmt("{s}  /  {s}", .{ page.title, page.status() }).style(.{ .font_size = 12 }).layout(.{ .width_percent = 100 });
+        var body = result.scroll(.{}).id(page.key).layout(.{ .height = 0, .weight = 1 })
+            .vbox(.{ .gap = 12 });
         if (page.content) |declare| {
             declare(&self.model, &body);
             if (page.remaining.len > 0)
                 _ = body.labelFmt("Still to port: {s}", .{page.remaining})
-                    .smallText(true)
-                    .textColor(0x526475)
-                    .widthPercent(100);
+                    .style(.{ .font_size = 12, .color = 0x526475 })
+                    .layout(.{ .width_percent = 100 });
         } else {
-            _ = body.label("Not yet implemented in ZUI").widthPercent(100);
-            _ = body.label(page.remaining).widthPercent(100);
+            _ = body.label("Not yet implemented in ZUI").layout(.{ .width_percent = 100 });
+            _ = body.label(page.remaining).layout(.{ .width_percent = 100 });
         }
     }
 };
