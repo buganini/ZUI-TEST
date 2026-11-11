@@ -6,7 +6,9 @@ ZUI is a declarative UI framework in Zig, developed after
 It currently targets **LVGL**, with an SDL2 desktop host on Linux.
 
 The first working version includes reactive state and two-way bindings,
-independent retained Views, keyed widget reuse, HBox/VBox, Grid, Scroll, Splitter, Label, Button, Checkbox and TextField.
+independent retained SubViews, id-based widget reuse, HBox/VBox, Grid, Scroll, Splitter,
+Spacer, Divider, Label, Button, Checkbox and TextField. Names and argument shapes
+follow PUI and CPPUI; see [Differences from PUI / CPPUI](#differences-from-pui--cppui).
 The [cookbook](cookbook/README.md) follows
 [CPPUI's cookbook](https://github.com/buganini/CPPUI/tree/main/cookbook): a
 scrollable example list, draggable Code / Result panes and runtime source reload.
@@ -102,9 +104,9 @@ following PUI / CPPUI:
 
 ```zig
 pub fn content(self: *Counter, ui: *zui.Builder) void {
-    const column = ui.vbox().padding(12).gap(8);
-    _ = column.labelFmt("Count: {d}", .{self.count.get(ui)});
-    _ = column.button("+").key("increment").onClick(zui.callback(self, increment));
+    const column = ui.vbox(.{ .gap = 8 }).layout(.{ .padding = 12 });
+    _ = column.labelFmt("Count: {d}", .{self.count.get(ui)}).style(.{ .font_size = 20 });
+    _ = column.button("+").id("increment").click(zui.callback(self, increment));
 }
 
 fn increment(self: *Counter) !void {
@@ -112,19 +114,39 @@ fn increment(self: *Counter) !void {
 }
 ```
 
-Every widget, container and View declaration returns a `Builder` handle.
+Every widget, container and SubView declaration returns a `Builder` handle.
 Modifiers return the same handle for chaining; use `_ =` when its result is not
 needed, or keep a `const` handle to add children to a container. Copies refer to
 the same snapshot node, so configuring a copy updates that declaration too.
-Factories take only their content or binding arguments; configuration uses
-methods such as `.key()`, `.visible()`, `.widthPercent()` and `.onClick()`.
-The former options argument has been removed. Methods use Zig's `lowerCamelCase`;
-type names remain `TitleCase`.
+Methods use Zig's `lowerCamelCase`; type names remain `TitleCase`.
+
+The API mirrors PUI and CPPUI. Zig has no keyword arguments, so options that
+PUI passes by keyword are anonymous structs, and only the fields you give are set:
+
+| PUI / CPPUI | ZUI |
+| --- | --- |
+| `HBox(inverse=, gap=10)` / `VBox(...)` | `ui.hbox(.{ .inverse = true, .gap = 12 })` / `ui.vbox(.{})` |
+| `Grid(gap=10)` + `.columns(n)` | `ui.grid(.{ .gap = 10 }).columns(n)` |
+| `Scroll(vertical=None, horizontal=False)` | `ui.scroll(.{ .vertical = null, .horizontal = false })` |
+| `Splitter(vertical=)` | `ui.splitter(.{ .vertical = true })`, optional `.ratio(binding)` |
+| `SubView<T>()` / nested `PUIView` | `ui.subView(&model)` |
+| `Spacer()`, `Divider()` | `ui.spacer()`, `ui.divider()` |
+| `Label(text)`, `Button(text)` | `ui.label(text)`, `ui.labelFmt(fmt, args)`, `ui.button(text)` |
+| `Checkbox(text, model)` | `ui.checkbox(text, binding)` |
+| `TextField(model)` + `.placeholder()` | `ui.textField(binding).placeholder(text)` |
+| `.id(name)` | `.id(name)` |
+| `.click(callback)` | `.click(zui.callback(self, function))` on buttons and labels |
+| `.layout(width=, height=, weight=, padding=)` | `.layout(.{ .width = 200, .weight = 1, .padding = 8 })` |
+| `.style(color=, bgColor=, fontSize=)` | `.style(.{ .color = 0x336699, .bg_color = 0xfff7e6, .font_size = 20 })` |
+| `.visible(value)`, `disabled=True` | `.visible(value)`, `.disabled(true)` |
+
+Struct fields use Zig's `snake_case` (`bg_color`, `font_size`). The default gap
+is 10 pixels, as in PUI and CPPUI.
 
 Valid repeated settings use the last value. Invalid settings latch the first
-error even if a later setter would correct them. Keys are copied and checked
-against siblings on every `.key()` call. Leaf controls cannot contain children;
-virtual Views accept `.key()` and take layout/visibility from their physical
+error even if a later setter would correct them. Ids are copied and checked
+against siblings on every `.id()` call. Leaf controls cannot contain children;
+virtual SubViews accept `.id()` and take layout/visibility from their physical
 containers. Invalid modifiers are reported at the same deferred error boundary.
 
 Widget declarations and tracked reads do not need `try`. All builders in one
@@ -134,41 +156,48 @@ declarations do nothing, and failed containers remain safe to use. State and
 explicit Binding reads still return real values so conditions and loops can
 finish normally. Custom binding getters must be free of side effects.
 
-App checks the error after `content()` returns, before changing subscriptions or
+Application checks the error after `content()` returns, before changing subscriptions or
 native widgets. A failed render preserves the previous UI and subscriptions;
 `flush()` / `pump()` returns the error. The next attempt starts with a fresh
 error record. Ordinary Zig code in `content()` still executes after a declaration
 failure, so keep application side effects in event callbacks.
 
 Use `ui.fail(err)` to report a custom declaration error. Models may also return
-`!void` for their own fallible operations; App captures that error at the same
+`!void` for their own fallible operations; Application captures that error at the same
 boundary, preserving any earlier Builder error. Model initialization, State
-writes in callbacks, and App operations remain explicitly fallible.
+writes in callbacks, and Application operations remain explicitly fallible.
 
 Create state with `zui.State(i32).init(allocator, 0)` and call `deinit()` after
-its App is destroyed. Editable text uses `try zui.TextState.init(allocator, text)`.
+its Application is destroyed. Editable text uses `try zui.TextState.init(allocator, text)`.
 Both provide `.binding()` for controls. See [the complete demo](examples/main.zig)
 for model setup, teardown and all supported widgets.
 
 ```zig
-const app = try zui.App.create(allocator, &model, .{ .title = "My application" });
+const app = try zui.Application.create(allocator, &model, .{ .title = "My application" });
 defer app.destroy();
 try app.run();
 ```
 
 ## Architecture
 
+The module split follows CPPUI (`node.hpp`, `view.hpp`, `dom.hpp`, `cppui/lvgl/`)
+and PUI (`node.py`, `view.py`, `dom.py`, one package per backend):
+
 | Module | Responsibility |
 | --- | --- |
 | [`node.zig`](src/node.zig) | Logical nodes, identity, options, Builder and owned declaration snapshots |
 | [`view.zig`](src/view.zig) | One model's `content()`, reactive subscriptions and prepare/commit lifecycle |
-| [`dom.zig`](src/dom.zig) | Retained LVGL objects, virtual-node flattening, reconciliation and native events |
+| [`dom.zig`](src/dom.zig) | Backend-independent reconciliation: identity matching, SubView flattening, staged prepare/commit |
 | [`state.zig`](src/state.zig) | State, bindings, signals and observers |
-| [`app.zig`](src/app.zig) | SDL/LVGL host, event loop and DOM ownership |
+| [`lvgl/backend.zig`](src/lvgl/backend.zig) | LVGL widgets: creation, updates, placement and native events |
+| [`lvgl/application.zig`](src/lvgl/application.zig) | SDL/LVGL host, event loop, DOM and root View ownership |
 
-`root.zig` exposes these modules as `zui.node`, `zui.view`, `zui.dom` and
-`zui.state`, as well as the usual top-level types. `core.zig` exposes the parts
-that work without LVGL. Each View finishes its content and checks deferred
+`dom.Dom(Backend)` is generic over a backend type; its doc comment lists the
+functions a backend provides. `zui.Dom` is the LVGL specialization.
+
+`root.zig` exposes these modules as `zui.node`, `zui.view`, `zui.dom`,
+`zui.state` and `zui.lvgl`, as well as the usual top-level types. `core.zig`
+exposes the parts that work without LVGL, including the generic DOM. Each View finishes its content and checks deferred
 errors before DOM preparation. All affected Views commit together only after
 preparation succeeds; a failed child leaves every previous snapshot and
 subscription intact. DOM traversal currently visits the retained tree even
@@ -176,15 +205,15 @@ when only one View is dirty.
 
 ```zig
 pub fn content(self: *Window, ui: *zui.Builder) void {
-    const page = ui.vbox().visible(self.show_counter.get(ui));
-    _ = page.view(&self.counter).key("counter");
+    const page = ui.vbox(.{}).visible(self.show_counter.get(ui));
+    _ = page.subView(&self.counter).id("counter");
 }
 ```
 
 All widgets and physical containers provide `.visible(bool)` (default `true`).
 `.visible(false)` hides a retained control and excludes it from layout;
 showing it again preserves its identity and unchanged editor caret. An `if`
-around the declaration instead removes and later remounts it. Virtual Views
+around the declaration instead removes and later remounts it. Virtual SubViews
 have no native visibility flag: put visibility on their physical container,
 as above. Hidden Views currently keep processing reactive updates; CPPUI's
 additional hidden-subtree freezing behavior is not implemented yet.
@@ -199,22 +228,22 @@ See the [Views recipe](cookbook/views.zig) for independent counters and retained
   event dispatch, coalescing several writes. Only dirty Views execute `content()`;
   a parent update does not rerun a clean child View. Call `flush()` explicitly in
   tests, `app.invalidate()` for non-reactive root fields, or
-  `app.findView(key).?.invalidate()` for non-reactive child fields. Building a
+  `app.findView(id).?.invalidate()` for non-reactive child fields. Building a
   View cannot mutate State; callbacks cannot recursively flush.
-- `ui.view(&child_model).key("child")` declares a retained virtual subtree
+- `ui.subView(&child_model).id("child")` declares a retained virtual subtree
   with its own subscriptions and snapshot. It can emit zero or more children
   without adding an LVGL wrapper. Ordinary functions accepting builders still
   share their caller's View. Cross-thread posting, computed state and explicit
   freeze/thaw hooks are not implemented yet.
-- Keys are unique among siblings. Identity is **kind + key**; unkeyed children
-  use **kind + position**. Views also match model type and address; changing the
+- Ids are unique among siblings. Identity is **kind + id**; children without
+  an id use **kind + position**. SubViews also match model type and address; changing the
   model replaces the View. Layout and text changes do not change identity.
   Matching currently uses a linear search per child, so very large reordered
   lists may require a future indexing optimization.
 - Models, State, Binding contexts and callback contexts are borrowed. They must
   remain at stable addresses and outlive every mounted control using them.
   `State(T)` copies values shallowly; `TextState` owns and copies its bytes.
-- Declaration keys and text are copied into a render arena. Builders are valid
+- Declaration ids and text are copied into a render arena. Builders are valid
   only during that `content()` call. Mounted nodes are separately allocated and retain
   their native identity across renders.
 - Build or Zig allocation failure keeps the previous tree and subscriptions.
@@ -224,28 +253,49 @@ See the [Views recipe](cookbook/views.zig) for independent counters and retained
   owning View remains dirty so a subsequent successful flush restores the model's value.
   Custom bindings must provide a `Signal` for automatic external notifications,
   or explicitly invalidate their owning View.
-- `app.find(key)` returns the first depth-first matching native pointer. It is
+- `app.find(id)` returns the first depth-first matching native pointer. It is
   borrowed and becomes invalid when removed. Deletion of a whole managed
   control/subtree is observed and remounted on the next flush. Do not delete or
   reparent a control's private internal children.
-- Each App exclusively owns one LVGL/SDL runtime. Destroy it after callbacks
+- Each Application exclusively owns one LVGL/SDL runtime. Destroy it after callbacks
   unwind; `requestQuit()` is safe inside callbacks. Borrowed hosts, multiple
   concurrent Apps and other backends are outside this first version.
 
-`widthPercent()` and `heightPercent()` size a control relative to its parent.
-`width()` / `height()` use pixels; the last size setter replaces the previous
-unit on that axis. `splitter(binding)` contains exactly two panes and takes a
-`Binding(u8)` percentage, clamped to 10–90. It owns the panes' sizes and flex weights. Call `.vertical(true)` to stack
-panes. Drag its divider, or focus it with Tab and use arrow keys.
-`.textColor()`, `.background()` and `.smallText()` can be set on a control
-or inherited from a container.
+`.layout(.{ .width_percent = 100 })` and `.height_percent` size a control
+relative to its parent; they are a ZUI addition to PUI's pixel sizes. A pixel
+size and a percentage replace each other on the same axis. `.weight` shares
+remaining space in an HBox or VBox, like PUI's `weight`. A Spacer takes the
+remaining space along its box's axis; a Divider draws a 1-pixel line across it.
+
+`splitter(.{})` contains exactly two panes. Without `.ratio(binding)` it keeps
+its own split, like PUI and CPPUI; with a `Binding(u8)` percentage, clamped to
+10–90, the model owns it. Drag its divider, or focus it with Tab and use arrow keys.
+`.style()` colors and font size can be set on a control or inherited from a
+container. LVGL uses the nearest compiled Montserrat size (12, 14, 16, 20 or 24).
+
+## Differences from PUI / CPPUI
+
+- Options are anonymous structs with `snake_case` fields instead of keyword
+  arguments; `labelFmt()` formats text without an intermediate allocation.
+- `.disabled(bool)` always takes an argument (CPPUI defaults to `true`).
+- Percent sizes are ZUI-only. `margin`, `minWidth` / `minHeight`, `fontWeight`
+  and `fontFamily` are not implemented yet.
+- Grid supports automatic placement only; `.grid(row, column, rowspan,
+  columnspan)` and `dense` are not implemented yet.
+- Splitters take exactly two panes. Scroll has no `scrollX` / `scrollY` anchoring.
+- TextField has no editing-buffer binding or `.input()` / `.change()` events.
+- There is no `Views` page selector or `ref()`; use `.visible()` on a container
+  around each `subView()` (see the [Views recipe](cookbook/views.zig)).
+- Application options (`title`, `width`, `height`) are passed to
+  `Application.create()` instead of chained setters.
 
 ## Source layout
 
-- `src/core.zig`: public facade for the LVGL-independent node, view and state modules.
-- `src/root.zig`: public facade adding the LVGL DOM and App modules.
+- `src/core.zig`: public facade for the LVGL-independent node, view, dom and state modules.
+- `src/root.zig`: public facade adding the LVGL backend and Application.
+- `src/lvgl/`: the LVGL backend and SDL application host.
 - `native/`: LVGL configuration and the small C SDL host adapter.
-- `examples/main.zig`: counter, form and keyed editor list.
+- `examples/main.zig`: counter, form and id-keyed editor list.
 - `cookbook/`: gallery, recipe registry, separate recipe sources and smoke tests.
 - `src/core_tests.zig`: declarations, deferred errors and reactive-state checks.
 - `src/integration_tests.zig`: native widget and lifetime regressions.

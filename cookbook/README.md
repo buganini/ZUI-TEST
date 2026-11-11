@@ -39,7 +39,7 @@ Zig adaptations of the examples, not a promise of identical C++ APIs.
 
 | Recipe | Demonstrates | Still to port |
 | --- | --- | --- |
-| VBox / HBox | Spacing, keyed reversal, flex growth | — |
+| VBox / HBox | Inverse order, Spacer, Divider, weights and gaps | — |
 | Label | Retained greeting visibility, colors, wrapping, literal text | — |
 | Button | Actions, disabled state, colors | — |
 | Grid | Equal columns, keyed reflow and editable cells | Explicit coordinates and spans |
@@ -70,13 +70,14 @@ All recipes use the same chainable declaration API, for example:
 
 ```zig
 _ = ui.label("Hello World")
-    .key("greeting")
+    .id("greeting")
+    .style(.{ .font_size = 20 })
     .visible(model.greeting_visible.get(ui));
 ```
 
-Containers use the same modifiers: `const row = ui.hbox().gap(12)`; add children
-through `row`. `_ =` discards a returned handle when no further use is needed.
-The former options argument is no longer accepted.
+Containers take PUI/CPPUI's constructor options as a struct, for example
+`const row = ui.hbox(.{ .inverse = true, .gap = 12 })`; add children through
+`row`. `_ =` discards a returned handle when no further use is needed.
 
 Declarations and tracked reads omit `try`: Builder records the first error and
 each View checks it when its own `content()` returns. A recipe can report its
