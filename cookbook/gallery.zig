@@ -55,17 +55,17 @@ pub const Gallery = struct {
         try self.load(self.selected.peek());
     }
 
-    pub fn content(self: *Gallery, ui: *zui.Builder) !void {
-        const selected = try self.selected.get(ui);
+    pub fn content(self: *Gallery, ui: *zui.Builder) void {
+        const selected = self.selected.get(ui);
         const page = recipes[selected];
-        var gallery = try ui.hbox(.{ .key = "gallery", .height_percent = 100, .padding = 16, .gap = 16 });
-        var sidebar = try gallery.vbox(.{ .key = "menu", .width = 180, .height_percent = 100, .gap = 12 });
-        try sidebar.label("Cookbook", .{});
-        try sidebar.label("ZUI / LVGL SDL2", .{ .small_text = true, .text_color = 0x526475 });
-        try sidebar.label("Examples", .{});
-        var menu = try sidebar.scroll(.{ .key = "menu-scroller", .height = 0, .grow = 1, .gap = 6 });
+        var gallery = ui.hbox(.{ .key = "gallery", .height_percent = 100, .padding = 16, .gap = 16 });
+        var sidebar = gallery.vbox(.{ .key = "menu", .width = 180, .height_percent = 100, .gap = 12 });
+        sidebar.label("Cookbook", .{});
+        sidebar.label("ZUI / LVGL SDL2", .{ .small_text = true, .text_color = 0x526475 });
+        sidebar.label("Examples", .{});
+        var menu = sidebar.scroll(.{ .key = "menu-scroller", .height = 0, .grow = 1, .gap = 6 });
         inline for (recipes, 0..) |recipe, index| {
-            try menu.button(recipe.title, .{
+            menu.button(recipe.title, .{
                 .key = "page:" ++ recipe.key,
                 .width_percent = 100,
                 .height = 32,
@@ -80,26 +80,26 @@ pub const Gallery = struct {
                 }.activate),
             });
         }
-        var panes = try gallery.splitter(self.ratio.binding(), .{ .key = "example-panes", .width = 0, .grow = 1, .height_percent = 100 });
-        var code = try panes.vbox(.{ .key = "code", .gap = 10 });
-        var heading = try code.hbox(.{ .height = 38 });
-        try heading.label("Code", .{ .width = 0, .grow = 1 });
-        try heading.button("Reload", .{ .key = "reload", .on_click = zui.callback(self, reload) });
-        try code.labelFmt("{s}.zig", .{page.key}, .{ .key = "source-file", .small_text = true });
+        var panes = gallery.splitter(self.ratio.binding(), .{ .key = "example-panes", .width = 0, .grow = 1, .height_percent = 100 });
+        var code = panes.vbox(.{ .key = "code", .gap = 10 });
+        var heading = code.hbox(.{ .height = 38 });
+        heading.label("Code", .{ .width = 0, .grow = 1 });
+        heading.button("Reload", .{ .key = "reload", .on_click = zui.callback(self, reload) });
+        code.labelFmt("{s}.zig", .{page.key}, .{ .key = "source-file", .small_text = true });
         // Changing the key resets source scroll position on recipe navigation.
-        var scroller = try code.scroll(.{ .key = page.key, .height = 0, .grow = 1, .padding = 12, .background = 0x272822, .text_color = 0xf8f8f2, .small_text = true });
-        try scroller.label(try self.source_text.get(ui), .{ .key = "source-code" });
-        var result = try panes.vbox(.{ .key = "result", .gap = 10 });
-        try result.label("Result", .{ .height = 38 });
-        try result.labelFmt("{s}  /  {s}", .{ page.title, page.status() }, .{ .small_text = true, .width_percent = 100 });
-        var body = try result.scroll(.{ .key = page.key, .height = 0, .grow = 1, .gap = 12 });
+        var scroller = code.scroll(.{ .key = page.key, .height = 0, .grow = 1, .padding = 12, .background = 0x272822, .text_color = 0xf8f8f2, .small_text = true });
+        scroller.label(self.source_text.get(ui), .{ .key = "source-code" });
+        var result = panes.vbox(.{ .key = "result", .gap = 10 });
+        result.label("Result", .{ .height = 38 });
+        result.labelFmt("{s}  /  {s}", .{ page.title, page.status() }, .{ .small_text = true, .width_percent = 100 });
+        var body = result.scroll(.{ .key = page.key, .height = 0, .grow = 1, .gap = 12 });
         if (page.content) |declare| {
-            try declare(&self.model, &body);
+            declare(&self.model, &body);
             if (page.remaining.len > 0)
-                try body.labelFmt("Still to port: {s}", .{page.remaining}, .{ .small_text = true, .text_color = 0x526475, .width_percent = 100 });
+                body.labelFmt("Still to port: {s}", .{page.remaining}, .{ .small_text = true, .text_color = 0x526475, .width_percent = 100 });
         } else {
-            try body.label("Not yet implemented in ZUI", .{ .width_percent = 100 });
-            try body.label(page.remaining, .{ .width_percent = 100 });
+            body.label("Not yet implemented in ZUI", .{ .width_percent = 100 });
+            body.label(page.remaining, .{ .width_percent = 100 });
         }
     }
 };

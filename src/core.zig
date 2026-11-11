@@ -71,8 +71,8 @@ pub fn Binding(comptime T: type) type {
         read: *const fn (*anyopaque) T,
         write: *const fn (*anyopaque, T) anyerror!void,
 
-        pub fn get(self: @This(), ui: *Builder) !T {
-            if (self.signal) |signal| try ui.track(signal);
+        pub fn get(self: @This(), ui: *Builder) T {
+            if (self.signal) |signal| ui.track(signal);
             return self.read(self.context);
         }
         pub fn set(self: @This(), value: T) !void {
@@ -99,8 +99,8 @@ pub fn State(comptime T: type) type {
         pub fn peek(self: *const Self) T {
             return self.value;
         }
-        pub fn get(self: *Self, ui: *Builder) !T {
-            try ui.track(&self.signal);
+        pub fn get(self: *Self, ui: *Builder) T {
+            ui.track(&self.signal);
             return self.value;
         }
         pub fn set(self: *Self, value: T) !void {
@@ -137,8 +137,8 @@ pub const TextState = struct {
     pub fn peek(self: *const TextState) []const u8 {
         return self.value;
     }
-    pub fn get(self: *TextState, ui: *Builder) ![]const u8 {
-        try ui.track(&self.signal);
+    pub fn get(self: *TextState, ui: *Builder) []const u8 {
+        ui.track(&self.signal);
         return self.value;
     }
     pub fn set(self: *TextState, text: []const u8) !void {
@@ -216,6 +216,7 @@ pub const Snapshot = struct {
     arena: std.heap.ArenaAllocator,
     root: Declaration,
     dependencies: std.ArrayListUnmanaged(*Signal) = std.ArrayListUnmanaged(*Signal).empty,
+    failure: ?anyerror = null,
 
     pub fn create(allocator: Allocator) !*Snapshot {
         const self = try allocator.create(Snapshot);
@@ -234,18 +235,51 @@ pub const Snapshot = struct {
     pub fn builder(self: *Snapshot) Builder {
         return .{ .snapshot = self, .parent = &self.root };
     }
+    fn fail(self: *Snapshot, err: anyerror) void {
+        if (self.failure == null) self.failure = err;
+    }
+    /// Called once content() returns, before preparing subscriptions or widgets.
+    /// A failed snapshot remains failed; the next render uses a fresh snapshot.
+    pub fn finish(self: *Snapshot) !void {
+        if (self.failure) |err| return err;
+        validate(&self.root) catch |err| {
+            self.fail(err);
+            return err;
+        };
+    }
+    fn validate(node: *const Declaration) error{InvalidPaneCount}!void {
+        if (node.kind == .splitter and node.children.items.len != 2) return error.InvalidPaneCount;
+        for (node.children.items) |child| try validate(child);
+    }
 };
 
 /// A builder is a handle into one render's arena; never keep it after content().
 pub const Builder = struct {
     snapshot: *Snapshot,
-    parent: *Declaration,
+    // Failed containers return a valid handle with no parent. All handles share
+    // the snapshot's first error, including copies made before the failure.
+    parent: ?*Declaration,
 
-    pub fn track(self: *Builder, signal: *Signal) !void {
-        if (std.mem.indexOfScalar(*Signal, self.snapshot.dependencies.items, signal) == null)
-            try self.snapshot.dependencies.append(self.snapshot.arena.allocator(), signal);
+    fn active(self: *const Builder) bool {
+        return self.parent != null and self.snapshot.failure == null;
     }
-    fn add(self: *Builder, kind: Kind, text: []const u8, options: Options) !*Declaration {
+    /// Report a custom declaration error without committing a partial tree.
+    pub fn fail(self: *Builder, err: anyerror) void {
+        self.snapshot.fail(err);
+    }
+    pub fn track(self: *Builder, signal: *Signal) void {
+        if (!self.active()) return;
+        if (std.mem.indexOfScalar(*Signal, self.snapshot.dependencies.items, signal) == null)
+            self.snapshot.dependencies.append(self.snapshot.arena.allocator(), signal) catch |err| self.fail(err);
+    }
+    fn add(self: *Builder, kind: Kind, text: []const u8, options: Options) ?*Declaration {
+        if (!self.active()) return null;
+        return self.addFallible(kind, text, options) catch |err| {
+            self.fail(err);
+            return null;
+        };
+    }
+    fn addFallible(self: *Builder, kind: Kind, text: []const u8, options: Options) !*Declaration {
         if (options.padding < 0 or options.gap < 0 or
             (options.width != null and options.width.? < 0) or
             (options.height != null and options.height.? < 0)) return error.InvalidLayout;
@@ -259,7 +293,7 @@ pub const Builder = struct {
         if (std.mem.indexOfScalar(u8, text, 0) != null) return error.EmbeddedNul;
         if (options.key) |key| {
             if (key.len == 0) return error.EmptyKey;
-            for (self.parent.children.items) |child| {
+            for (self.parent.?.children.items) |child| {
                 if (child.options.key) |other| {
                     if (std.mem.eql(u8, key, other)) return error.DuplicateKey;
                 }
@@ -271,52 +305,61 @@ pub const Builder = struct {
         @memcpy(copied_text, text);
         node.* = .{ .kind = kind, .options = options, .text = copied_text };
         if (options.key) |key| node.options.key = try allocator.dupe(u8, key);
-        try self.parent.children.append(allocator, node);
+        try self.parent.?.children.append(allocator, node);
         return node;
     }
-    fn container(self: *Builder, kind: Kind, options: Options) !Builder {
-        return .{ .snapshot = self.snapshot, .parent = try self.add(kind, "", options) };
+    fn container(self: *Builder, kind: Kind, options: Options) Builder {
+        return .{ .snapshot = self.snapshot, .parent = self.add(kind, "", options) };
     }
-    pub fn vbox(self: *Builder, options: Options) !Builder {
+    pub fn vbox(self: *Builder, options: Options) Builder {
         return self.container(.column, options);
     }
-    pub fn hbox(self: *Builder, options: Options) !Builder {
+    pub fn hbox(self: *Builder, options: Options) Builder {
         return self.container(.row, options);
     }
-    pub fn scroll(self: *Builder, options: Options) !Builder {
+    pub fn scroll(self: *Builder, options: Options) Builder {
         return self.container(.scroll, options);
     }
-    pub fn grid(self: *Builder, options: Options) !Builder {
+    pub fn grid(self: *Builder, options: Options) Builder {
         return self.container(.grid, options);
     }
     /// Exactly two child panes. Ratio is a percentage, clamped to 10..90.
     /// Drag the divider or focus it and use the arrow keys to resize.
-    pub fn splitter(self: *Builder, ratio: Binding(u8), options: Options) !Builder {
-        const value = try ratio.get(self);
-        const panes = try self.container(.splitter, options);
-        panes.parent.split_binding = ratio;
-        panes.parent.split_ratio = std.math.clamp(value, 10, 90);
+    pub fn splitter(self: *Builder, ratio: Binding(u8), options: Options) Builder {
+        if (!self.active()) return .{ .snapshot = self.snapshot, .parent = null };
+        const value = ratio.get(self);
+        const panes = self.container(.splitter, options);
+        if (panes.parent) |node| {
+            node.split_binding = ratio;
+            node.split_ratio = std.math.clamp(value, 10, 90);
+        }
         return panes;
     }
-    pub fn label(self: *Builder, text: []const u8, options: Options) !void {
-        _ = try self.add(.label, text, options);
+    pub fn label(self: *Builder, text: []const u8, options: Options) void {
+        _ = self.add(.label, text, options);
     }
-    pub fn labelFmt(self: *Builder, comptime fmt: []const u8, args: anytype, options: Options) !void {
-        const text = try std.fmt.allocPrint(self.snapshot.arena.allocator(), fmt, args);
-        try self.label(text, options);
+    pub fn labelFmt(self: *Builder, comptime fmt: []const u8, args: anytype, options: Options) void {
+        if (!self.active()) return;
+        const text = std.fmt.allocPrint(self.snapshot.arena.allocator(), fmt, args) catch |err| {
+            self.fail(err);
+            return;
+        };
+        self.label(text, options);
     }
-    pub fn button(self: *Builder, text: []const u8, options: Options) !void {
-        _ = try self.add(.button, text, options);
+    pub fn button(self: *Builder, text: []const u8, options: Options) void {
+        _ = self.add(.button, text, options);
     }
-    pub fn checkbox(self: *Builder, text: []const u8, binding: Binding(bool), options: Options) !void {
-        const value = try binding.get(self);
-        const node = try self.add(.checkbox, text, options);
+    pub fn checkbox(self: *Builder, text: []const u8, binding: Binding(bool), options: Options) void {
+        if (!self.active()) return;
+        const value = binding.get(self);
+        const node = self.add(.checkbox, text, options) orelse return;
         node.checked = value;
         node.bool_binding = binding;
     }
-    pub fn textField(self: *Builder, binding: Binding([]const u8), options: Options) !void {
-        const text = try binding.get(self);
-        const node = try self.add(.text_field, text, options);
+    pub fn textField(self: *Builder, binding: Binding([]const u8), options: Options) void {
+        if (!self.active()) return;
+        const text = binding.get(self);
+        const node = self.add(.text_field, text, options) orelse return;
         node.text_binding = binding;
     }
 };
@@ -375,11 +418,79 @@ test "builder owns keys and text and rejects duplicate sibling keys" {
     defer snapshot.destroy();
     var ui = snapshot.builder();
     var text = [_]u8{ 'o', 'k' };
-    try ui.label(&text, .{ .key = "a" });
+    ui.label(&text, .{ .key = "a" });
     text[0] = 'x';
+    try snapshot.finish();
     try std.testing.expectEqualStrings("ok", snapshot.root.children.items[0].text);
-    try std.testing.expectError(error.DuplicateKey, ui.button("duplicate", .{ .key = "a" }));
-    try std.testing.expectError(error.InvalidLayout, ui.grid(.{ .columns = 0 }));
+    ui.button("duplicate", .{ .key = "a" });
+    var invalid = ui.grid(.{ .columns = 0 });
+    invalid.label("ignored", .{});
+    ui.fail(error.LaterError);
+    try std.testing.expectEqual(1, snapshot.root.children.items.len);
+    try std.testing.expectError(error.DuplicateKey, snapshot.finish());
+    try std.testing.expectError(error.DuplicateKey, snapshot.finish());
+}
+
+test "invalid containers remain safe and disable previously copied builders" {
+    const snapshot = try Snapshot.create(std.testing.allocator);
+    defer snapshot.destroy();
+    var ui = snapshot.builder();
+    var sibling = ui.vbox(.{});
+    var invalid = ui.grid(.{ .columns = 0 });
+    var nested = invalid.hbox(.{});
+    nested.labelFmt("Ignored {d}", .{42}, .{});
+    sibling.button("also ignored", .{});
+    try std.testing.expect(invalid.parent == null);
+    try std.testing.expect(nested.parent == null);
+    try std.testing.expectEqual(0, sibling.parent.?.children.items.len);
+    try std.testing.expectError(error.InvalidLayout, snapshot.finish());
+}
+
+test "tracking allocation failure keeps real state values and suppresses later widget getters" {
+    const Probe = struct {
+        reads: usize = 0,
+        fn read(raw: *anyopaque) bool {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.reads += 1;
+            return true;
+        }
+        fn write(_: *anyopaque, _: bool) !void {}
+    };
+    const a = std.testing.allocator;
+    var failing = std.testing.FailingAllocator.init(a, .{});
+    const snapshot = try Snapshot.create(failing.allocator());
+    defer snapshot.destroy();
+    var state = State(usize).init(a, 3);
+    defer state.deinit();
+    var text = try TextState.init(a, "real text");
+    defer text.deinit();
+    var ui = snapshot.builder();
+    failing.fail_index = failing.alloc_index;
+    const count = state.get(&ui);
+    try std.testing.expectEqual(3, count);
+    try std.testing.expectEqualStrings("real text", text.get(&ui));
+    try std.testing.expectEqual(3, state.binding().get(&ui));
+    var probe = Probe{};
+    const binding = Binding(bool){ .context = &probe, .read = Probe.read, .write = Probe.write };
+    for (0..count) |_| {
+        var child = ui.vbox(.{});
+        child.checkbox("skipped getter", binding, .{});
+        child.labelFmt("still safe: {s}", .{text.get(&ui)}, .{});
+    }
+    try std.testing.expectEqual(0, probe.reads);
+    try std.testing.expectEqual(0, snapshot.root.children.items.len);
+    try std.testing.expectError(error.OutOfMemory, snapshot.finish());
+}
+
+test "splitter child counts are checked after content declarations finish" {
+    const snapshot = try Snapshot.create(std.testing.allocator);
+    defer snapshot.destroy();
+    var ratio = State(u8).init(std.testing.allocator, 50);
+    defer ratio.deinit();
+    var ui = snapshot.builder();
+    var panes = ui.splitter(ratio.binding(), .{});
+    panes.label("Only one pane", .{});
+    try std.testing.expectError(error.InvalidPaneCount, snapshot.finish());
 }
 
 fn allocationScenario(allocator: Allocator) !void {
@@ -392,9 +503,22 @@ fn allocationScenario(allocator: Allocator) !void {
     const snapshot = try Snapshot.create(allocator);
     defer snapshot.destroy();
     var ui = snapshot.builder();
-    var column = try ui.vbox(.{ .key = "column" });
-    try column.checkbox("toggle", state.binding(), .{});
-    try column.textField(text.binding(), .{});
+    var column = ui.vbox(.{ .key = "column" });
+    column.checkbox("toggle", state.binding(), .{});
+    column.textField(text.binding(), .{});
+    column.labelFmt("Value: {s}", .{text.get(&ui)}, .{});
+    var row = column.hbox(.{});
+    row.button("Action", .{});
+    var grid = column.grid(.{ .columns = 2 });
+    grid.label("Cell", .{});
+    var scroll = column.scroll(.{});
+    scroll.label("Scrollable", .{});
+    var ratio = State(u8).init(allocator, 50);
+    defer ratio.deinit();
+    var panes = column.splitter(ratio.binding(), .{});
+    panes.label("Left", .{});
+    panes.label("Right", .{});
+    try snapshot.finish();
     try observer.prepare(snapshot.dependencies.items);
     observer.commit(snapshot.dependencies.items);
     try text.set("updated");

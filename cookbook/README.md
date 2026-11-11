@@ -58,12 +58,17 @@ page preserves keyed control identity and editor caret position.
 
 - `gallery.zig`: navigation, source reload and Code / Result layout.
 - `recipes.zig`: recipe registration and capability status.
-- `<key>.zig`: a `pub fn content(model, ui) !void` entry point and callbacks for
+- `<key>.zig`: a `pub fn content(model, ui) void` entry point and callbacks for
   one recipe. Application models and the gallery also declare UI in `content()`.
 - `model.zig`: model lifetime and external binding storage.
 - `source.zig`: runtime source loader using `std.Io`.
 - `tests.zig`: native events and assertions, kept out of interactive recipes.
 - `capture.zig`: headless screenshots of implemented pages and a fallback page.
+
+Declarations and tracked reads omit `try`: Builder records the first error and
+App checks it when the gallery's `content()` returns. A recipe can report its
+own failure with `ui.fail(err)`. Event callbacks still propagate State write
+errors explicitly.
 
 ```sh
 zig build test -Dlvgl-dir=../CPPUI/lvgl-9.6.0

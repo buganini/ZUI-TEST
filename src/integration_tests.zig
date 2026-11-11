@@ -35,28 +35,28 @@ const Model = struct {
         self.count.deinit();
     }
     pub fn content(self: *Model, ui: *zui.Builder) !void {
-        var box = try ui.vbox(.{ .key = "main", .padding = 12 });
-        const value = if (self.use_alternate) try self.alternate.get(ui) else try self.count.get(ui);
-        try box.labelFmt("Count: {d}", .{value}, .{ .key = "count" });
+        var box = ui.vbox(.{ .key = "main", .padding = 12 });
+        const value = if (self.use_alternate) self.alternate.get(ui) else self.count.get(ui);
+        box.labelFmt("Count: {d}", .{value}, .{ .key = "count" });
         if (self.mutate) try self.count.set(42);
         if (self.fail) return error.BuilderFailed;
-        if (self.duplicate) try box.label("duplicate", .{ .key = "count" });
-        try box.button("+", .{ .key = "increment", .on_click = zui.callback(self, increment) });
-        try box.checkbox("Enabled", self.checked.binding(), .{ .key = "check" });
-        try box.textField(self.text.binding(), .{ .key = "text" });
-        if (try self.show.get(ui))
-            try box.button("Remove me", .{ .key = "remove", .on_click = zui.callback(self, remove) });
-        var list = try box.hbox(.{ .key = "items" });
+        if (self.duplicate) box.label("duplicate", .{ .key = "count" });
+        box.button("+", .{ .key = "increment", .on_click = zui.callback(self, increment) });
+        box.checkbox("Enabled", self.checked.binding(), .{ .key = "check" });
+        box.textField(self.text.binding(), .{ .key = "text" });
+        if (self.show.get(ui))
+            box.button("Remove me", .{ .key = "remove", .on_click = zui.callback(self, remove) });
+        var list = box.hbox(.{ .key = "items" });
         const keys = [_][]const u8{ "a", "b", "c" };
         for (0..self.length) |index| {
             const i = if (self.reversed) self.length - 1 - index else index;
-            try list.label(keys[i], .{ .key = keys[i] });
+            list.label(keys[i], .{ .key = keys[i] });
         }
-        var grid = try box.grid(.{ .key = "grid", .columns = 2 });
-        try grid.label("first", .{});
-        try grid.label("second", .{});
-        var scroll = try box.scroll(.{ .key = "scroll", .height = 60 });
-        try scroll.label("scroll content", .{});
+        var grid = box.grid(.{ .key = "grid", .columns = 2 });
+        grid.label("first", .{});
+        grid.label("second", .{});
+        var scroll = box.scroll(.{ .key = "scroll", .height = 60 });
+        scroll.label("scroll content", .{});
     }
     fn increment(self: *Model) !void {
         try self.count.set(self.count.peek() + 1);
@@ -181,6 +181,70 @@ test "builder errors preserve the old tree and subscriptions and allow retry" {
     try std.testing.expectEqualStrings("Count: 15", std.mem.span(c.lv_label_get_text(old)));
 }
 
+test "void content runs to completion before deferred errors reject the tree and subscriptions" {
+    const Deferred = struct {
+        first: zui.State(i32),
+        alternate: zui.State(i32),
+        fail: bool = false,
+        completed: bool = false,
+        pub fn content(self: *@This(), ui: *zui.Builder) void {
+            self.completed = false;
+            const value = if (self.fail) self.alternate.get(ui) else self.first.get(ui);
+            ui.labelFmt("Value: {d}", .{value}, .{ .key = "value" });
+            if (self.fail) {
+                ui.button("Duplicate", .{ .key = "value" });
+                var invalid = ui.grid(.{ .columns = 0 });
+                var nested = invalid.vbox(.{});
+                nested.label("Ignored", .{});
+                ui.fail(error.LaterError);
+            }
+            self.completed = true;
+        }
+    };
+    var model = Deferred{
+        .first = zui.State(i32).init(a, 1),
+        .alternate = zui.State(i32).init(a, 9),
+    };
+    defer model.first.deinit();
+    defer model.alternate.deinit();
+    const app = try zui.App.create(a, &model, .{});
+    defer app.destroy();
+    try app.flush();
+    const original = app.find("value").?;
+    model.fail = true;
+    model.completed = false;
+    app.invalidate();
+    try std.testing.expectError(error.DuplicateKey, app.flush());
+    try std.testing.expect(model.completed);
+    try std.testing.expectEqual(1, app.render_count);
+    try std.testing.expectEqual(original, app.find("value").?);
+    try std.testing.expectEqualStrings("Value: 1", std.mem.span(c.lv_label_get_text(original)));
+    try std.testing.expectEqual(1, model.first.signal.observers.items.len);
+    try std.testing.expectEqual(0, model.alternate.signal.observers.items.len);
+    model.fail = false;
+    try model.first.set(7);
+    try app.flush();
+    try std.testing.expectEqual(2, app.render_count);
+    try std.testing.expectEqualStrings("Value: 7", std.mem.span(c.lv_label_get_text(original)));
+}
+
+test "fallible content shares the deferred boundary without replacing an earlier error" {
+    const Fallible = struct {
+        declaration_error: bool = false,
+        pub fn content(self: *@This(), ui: *zui.Builder) !void {
+            if (self.declaration_error) ui.fail(error.DeclarationFailed);
+            return error.ModelFailed;
+        }
+    };
+    var model = Fallible{};
+    const app = try zui.App.create(a, &model, .{});
+    defer app.destroy();
+    try std.testing.expectError(error.ModelFailed, app.flush());
+    model.declaration_error = true;
+    try std.testing.expectError(error.DeclarationFailed, app.flush());
+    try std.testing.expectEqual(0, app.render_count);
+}
+
 test "externally deleted containers and root are rebuilt and SDL quit is deferred" {
     var model = try Model.init(a);
     defer model.deinit();
@@ -227,16 +291,16 @@ test "splitter resizes retained panes, clamps keyboard input and rejects missing
         vertical: bool = false,
         missing: bool = false,
         pub fn content(self: *@This(), ui: *zui.Builder) !void {
-            var panes = try ui.splitter(self.ratio.binding(), .{
+            var panes = ui.splitter(self.ratio.binding(), .{
                 .key = "panes",
                 .height_percent = 100,
                 .vertical = self.vertical,
             });
-            var left = try panes.vbox(.{ .key = "left" });
-            try left.label("Code", .{});
+            var left = panes.vbox(.{ .key = "left" });
+            left.label("Code", .{});
             if (!self.missing) {
-                var right = try panes.vbox(.{ .key = "right" });
-                try right.label("Result", .{});
+                var right = panes.vbox(.{ .key = "right" });
+                right.label("Result", .{});
             }
         }
     };

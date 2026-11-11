@@ -37,34 +37,34 @@ pub const Demo = struct {
         self.show.deinit();
         self.count.deinit();
     }
-    pub fn content(self: *Demo, ui: *zui.Builder) !void {
-        var page = try ui.vbox(.{ .key = "page", .padding = 20, .gap = 16 });
-        try page.label("ZUI / Zig + LVGL", .{});
-        var counter = try page.hbox(.{});
-        try counter.button("-", .{ .key = "decrement", .on_click = zui.callback(self, decrement) });
-        try counter.labelFmt("Count: {d}", .{try self.count.get(ui)}, .{ .key = "count", .width = 140 });
-        try counter.button("+", .{ .key = "increment", .on_click = zui.callback(self, increment) });
+    pub fn content(self: *Demo, ui: *zui.Builder) void {
+        var page = ui.vbox(.{ .key = "page", .padding = 20, .gap = 16 });
+        page.label("ZUI / Zig + LVGL", .{});
+        var counter = page.hbox(.{});
+        counter.button("-", .{ .key = "decrement", .on_click = zui.callback(self, decrement) });
+        counter.labelFmt("Count: {d}", .{self.count.get(ui)}, .{ .key = "count", .width = 140 });
+        counter.button("+", .{ .key = "increment", .on_click = zui.callback(self, increment) });
 
-        try page.checkbox("Show greeting", self.show.binding(), .{ .key = "show" });
-        var form = try page.grid(.{ .columns = 2 });
-        try form.label("Your name", .{});
-        try form.textField(self.name.binding(), .{ .key = "name" });
-        if (try self.show.get(ui))
-            try page.labelFmt("Hello, {s}!", .{try self.name.get(ui)}, .{ .key = "greeting" });
+        page.checkbox("Show greeting", self.show.binding(), .{ .key = "show" });
+        var form = page.grid(.{ .columns = 2 });
+        form.label("Your name", .{});
+        form.textField(self.name.binding(), .{ .key = "name" });
+        if (self.show.get(ui))
+            page.labelFmt("Hello, {s}!", .{self.name.get(ui)}, .{ .key = "greeting" });
 
-        const length = try self.length.get(ui);
-        const reversed = try self.reversed.get(ui);
-        var actions = try page.hbox(.{});
-        try actions.button("Add row", .{ .key = "add", .disabled = length == keys.len, .on_click = zui.callback(self, add) });
-        try actions.button("Remove row", .{ .key = "remove", .disabled = length == 0, .on_click = zui.callback(self, remove) });
-        try actions.button("Reverse", .{ .key = "reverse", .on_click = zui.callback(self, reverse) });
-        try page.label("Edit a row, then reverse: the same editor is retained.", .{});
-        var list = try page.scroll(.{ .key = "list", .height = 210, .gap = 10 });
+        const length = self.length.get(ui);
+        const reversed = self.reversed.get(ui);
+        var actions = page.hbox(.{});
+        actions.button("Add row", .{ .key = "add", .disabled = length == keys.len, .on_click = zui.callback(self, add) });
+        actions.button("Remove row", .{ .key = "remove", .disabled = length == 0, .on_click = zui.callback(self, remove) });
+        actions.button("Reverse", .{ .key = "reverse", .on_click = zui.callback(self, reverse) });
+        page.label("Edit a row, then reverse: the same editor is retained.", .{});
+        var list = page.scroll(.{ .key = "list", .height = 210, .gap = 10 });
         for (0..length) |index| {
             const i = if (reversed) length - 1 - index else index;
-            var row = try list.hbox(.{ .key = keys[i] });
-            try row.labelFmt("Row {d}", .{i + 1}, .{ .width = 100 });
-            try row.textField(self.items[i].binding(), .{ .width = 360 });
+            var row = list.hbox(.{ .key = keys[i] });
+            row.labelFmt("Row {d}", .{i + 1}, .{ .width = 100 });
+            row.textField(self.items[i].binding(), .{ .width = 360 });
         }
     }
     fn increment(self: *Demo) !void {

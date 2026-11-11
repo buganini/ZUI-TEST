@@ -96,15 +96,15 @@ in a real desktop session.
 
 ## API
 
-An application model supplies `pub fn content(self, ui: *zui.Builder) !void`.
+An application model supplies `pub fn content(self, ui: *zui.Builder) void`.
 Cookbook recipes also use `content()` as their UI declaration entry point,
 following PUI / CPPUI:
 
 ```zig
-pub fn content(self: *Counter, ui: *zui.Builder) !void {
-    var column = try ui.vbox(.{ .padding = 12, .gap = 8 });
-    try column.labelFmt("Count: {d}", .{try self.count.get(ui)}, .{});
-    try column.button("+", .{
+pub fn content(self: *Counter, ui: *zui.Builder) void {
+    var column = ui.vbox(.{ .padding = 12, .gap = 8 });
+    column.labelFmt("Count: {d}", .{self.count.get(ui)}, .{});
+    column.button("+", .{
         .key = "increment",
         .on_click = zui.callback(self, increment),
     });
@@ -114,6 +114,24 @@ fn increment(self: *Counter) !void {
     try self.count.set(self.count.peek() + 1);
 }
 ```
+
+Widget declarations and tracked reads do not need `try`. All builders in one
+`content()` call share its first declaration error, including allocation failures
+while formatting text or tracking dependencies. After a failure, subsequent UI
+declarations do nothing, and failed containers remain safe to use. State and
+explicit Binding reads still return real values so conditions and loops can
+finish normally. Custom binding getters must be free of side effects.
+
+App checks the error after `content()` returns, before changing subscriptions or
+native widgets. A failed render preserves the previous UI and subscriptions;
+`flush()` / `pump()` returns the error. The next attempt starts with a fresh
+error record. Ordinary Zig code in `content()` still executes after a declaration
+failure, so keep application side effects in event callbacks.
+
+Use `ui.fail(err)` to report a custom declaration error. Models may also return
+`!void` for their own fallible operations; App captures that error at the same
+boundary, preserving any earlier Builder error. Model initialization, State
+writes in callbacks, and App operations remain explicitly fallible.
 
 Create state with `zui.State(i32).init(allocator, 0)` and call `deinit()` after
 its App is destroyed. Editable text uses `try zui.TextState.init(allocator, text)`.

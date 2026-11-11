@@ -43,7 +43,7 @@ pub const App = struct {
     allocator: Allocator,
     host: *c.zui_host,
     context: *anyopaque,
-    content_fn: *const fn (*anyopaque, *Builder) anyerror!void,
+    content_fn: *const fn (*anyopaque, *Builder) void,
     observer: core.Observer,
     snapshot: ?*core.Snapshot = null,
     root: ?*Mounted = null,
@@ -64,9 +64,10 @@ pub const App = struct {
             .context = model,
             .observer = core.Observer.init(allocator),
             .content_fn = struct {
-                fn content(raw: *anyopaque, ui: *Builder) !void {
+                fn content(raw: *anyopaque, ui: *Builder) void {
                     const context: T = @ptrCast(@alignCast(raw));
-                    try context.content(ui);
+                    const result = context.content(ui);
+                    if (@TypeOf(result) != void) result catch |err| ui.fail(err);
                 }
             }.content,
         };
@@ -107,8 +108,9 @@ pub const App = struct {
             core.build_depth += 1;
             defer core.build_depth -= 1;
             var ui = next.builder();
-            try self.content_fn(self.context, &ui);
+            self.content_fn(self.context, &ui);
         }
+        try next.finish();
         try self.observer.prepare(next.dependencies.items);
         // New native objects are hidden until the whole plan is ready. Every
         // fallible Zig allocation occurs before commit mutates existing widgets.
@@ -205,7 +207,6 @@ pub const App = struct {
         // An externally deleted native subtree still has Zig records. They are
         // retired during commit, while new records are staged independently.
         const children = declaration.children.items;
-        if (declaration.kind == .splitter and children.len != 2) return error.InvalidPaneCount;
         plan.children = try arena.alloc(*Plan, children.len);
         try plan.mounted.children.ensureTotalCapacity(self.allocator, children.len);
         if (declaration.kind == .grid) {

@@ -4,7 +4,7 @@ const Model = @import("model.zig").Model;
 pub const Recipe = struct {
     key: [:0]const u8,
     title: [:0]const u8,
-    content: ?*const fn (*Model, *zui.Builder) anyerror!void = null,
+    content: ?*const fn (*Model, *zui.Builder) void = null,
     remaining: [:0]const u8 = "",
 
     pub fn status(self: Recipe) [:0]const u8 {
