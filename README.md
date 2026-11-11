@@ -126,7 +126,9 @@ PUI passes by keyword are anonymous structs, and only the fields you give are se
 | PUI / CPPUI | ZUI |
 | --- | --- |
 | `HBox(inverse=, gap=10)` / `VBox(...)` | `ui.hbox(.{ .inverse = true, .gap = 12 })` / `ui.vbox(.{})` |
-| `Grid(gap=10)` + `.columns(n)` | `ui.grid(.{ .gap = 10 }).columns(n)` |
+| `Grid(gap=10)` | `ui.grid(.{ .gap = 10 })` (manual placement) |
+| `.columns(n, dense=, expandChildren=)` | `.columns(n, .{ .dense = true, .expand_children = false })` |
+| `.grid(row=, column=, rowspan=, columnspan=)` | `.gridCell(.{ .row = 0, .column = 1, .columnspan = 2 })` |
 | `Scroll(vertical=None, horizontal=False)` | `ui.scroll(.{ .vertical = null, .horizontal = false })` |
 | `Splitter(vertical=)` | `ui.splitter(.{ .vertical = true })`, optional `.ratio(binding)` |
 | `SubView<T>()` / nested `PUIView` | `ui.subView(&model)` |
@@ -280,8 +282,9 @@ container. LVGL uses the nearest compiled Montserrat size (12, 14, 16, 20 or 24)
 - `.disabled(bool)` always takes an argument (CPPUI defaults to `true`).
 - Percent sizes are ZUI-only. `margin`, `minWidth` / `minHeight`, `fontWeight`
   and `fontFamily` are not implemented yet.
-- Grid supports automatic placement only; `.grid(row, column, rowspan,
-  columnspan)` and `dense` are not implemented yet.
+- A Grid child's cell is `.gridCell()`, because `grid()` already declares the
+  container. There are no width breakpoints (`wideColumns`, `wideGrid`), and
+  columns are equal rather than weighted by their children's expansion.
 - Splitters take exactly two panes. Scroll has no `scrollX` / `scrollY` anchoring.
 - TextField has no editing-buffer binding or `.input()` / `.change()` events.
 - There is no `Views` page selector or `ref()`; use `.visible()` on a container

@@ -28,7 +28,7 @@ const Parent = struct {
     calls: usize = 0,
     pub fn content(self: *@This(), ui: *zui.Builder) void {
         self.calls += 1;
-        const grid = ui.grid(.{}).id("grid").columns(2);
+        const grid = ui.grid(.{}).id("grid").columns(2, .{});
         _ = grid.label("before").id("before");
         if (self.reverse) _ = grid.subView(self.second).id("second");
         if (self.show) _ = grid.subView(self.first).id("first");

@@ -60,7 +60,7 @@ test "builder owns ids and text and rejects duplicate sibling keys" {
     try snapshot.finish();
     try std.testing.expectEqualStrings("ok", snapshot.root.children.items[0].text);
     _ = ui.button("duplicate").id("a");
-    const invalid = ui.grid(.{}).columns(0);
+    const invalid = ui.grid(.{}).columns(0, .{});
     _ = invalid.label("ignored");
     ui.fail(error.LaterError);
     try std.testing.expectEqual(2, snapshot.root.children.items.len);
@@ -73,7 +73,7 @@ test "invalid containers remain safe and disable previously copied builders" {
     defer snapshot.destroy();
     var ui = snapshot.builder();
     const sibling = ui.vbox(.{});
-    const invalid = ui.grid(.{}).columns(0);
+    const invalid = ui.grid(.{}).columns(0, .{});
     const nested = invalid.hbox(.{});
     _ = nested.labelFmt("Ignored {d}", .{42});
     _ = sibling.button("also ignored");
@@ -146,7 +146,7 @@ fn allocationScenario(allocator: Allocator) !void {
     _ = column.labelFmt("Value: {s}", .{text.get(&ui)});
     const row = column.hbox(.{});
     _ = row.button("Action");
-    const grid = column.grid(.{}).columns(2);
+    const grid = column.grid(.{}).columns(2, .{});
     _ = grid.label("Cell");
     const scroll = column.scroll(.{});
     _ = scroll.label("Scrollable");
@@ -291,7 +291,7 @@ test "container and modifier options are validated at the deferred boundary" {
         }.run,
         struct {
             fn run(ui: core.Builder) void {
-                _ = ui.label("x").columns(2);
+                _ = ui.label("x").columns(2, .{});
             }
         }.run,
     };
@@ -302,4 +302,84 @@ test "container and modifier options are validated at the deferred boundary" {
         declare(snapshot.builder());
         try std.testing.expectError(err, snapshot.finish());
     }
+}
+
+fn expectCells(expected: []const ?core.grid.Cell, actual: []const ?core.grid.Cell) !void {
+    try std.testing.expectEqual(expected.len, actual.len);
+    for (expected, actual) |want, got| try std.testing.expectEqual(want, got);
+}
+fn placeGrid(grid: core.Builder, snapshot: *Snapshot) !core.grid.Placement {
+    const node = grid.parent.?;
+    var children: [8]*const core.Node = undefined;
+    for (node.children.items, 0..) |child, index| children[index] = child;
+    _ = snapshot;
+    return core.grid.place(std.testing.allocator, node, children[0..node.children.items.len]);
+}
+
+test "grid placement follows PUI: manual cells, dense modes, spans and expansion" {
+    const a = std.testing.allocator;
+    const snapshot = try Snapshot.create(a);
+    defer snapshot.destroy();
+    const ui = snapshot.builder();
+
+    const manual = ui.grid(.{});
+    _ = manual.label("A").gridCell(.{ .row = 0, .column = 0, .rowspan = 2 });
+    _ = manual.label("unplaced").gridCell(.{ .columnspan = 2 });
+    _ = manual.label("B").gridCell(.{ .row = 1 }).gridCell(.{ .column = 2, .columnspan = 2 });
+    const m = try placeGrid(manual, snapshot);
+    defer a.free(m.cells);
+    try expectCells(&.{ .{ .row = 0, .column = 0, .rowspan = 2 }, null, .{ .row = 1, .column = 2, .columnspan = 2 } }, m.cells);
+    try std.testing.expectEqual(4, m.columns);
+    try std.testing.expectEqual(2, m.rows);
+
+    // A hole at (1,0) is left of the cursor: ordered placement revisits the
+    // previous row, forward placement never goes back.
+    const modes = [_]?bool{ null, false, true };
+    const expected_e = [_]core.grid.Cell{ .{ .row = 1, .column = 0 }, .{ .row = 2, .column = 0 }, .{ .row = 1, .column = 0 } };
+    for (modes, expected_e) |dense, e| {
+        const auto = ui.grid(.{}).columns(4, .{ .dense = dense, .expand_children = false });
+        _ = auto.label("A");
+        _ = auto.label("B").gridCell(.{ .rowspan = 2 });
+        _ = auto.label("C").gridCell(.{ .columnspan = 2 });
+        _ = auto.label("D").gridCell(.{ .columnspan = 2 });
+        _ = auto.label("E");
+        _ = auto.label("hidden").visible(false);
+        const p = try placeGrid(auto, snapshot);
+        defer a.free(p.cells);
+        try expectCells(&.{
+            .{ .row = 0, .column = 0 },
+            .{ .row = 0, .column = 1, .rowspan = 2 },
+            .{ .row = 0, .column = 2, .columnspan = 2 },
+            .{ .row = 1, .column = 2, .columnspan = 2 },
+            e,
+            null,
+        }, p.cells);
+    }
+
+    // Dense placement backfills earlier rows.
+    const backfill = ui.grid(.{}).columns(3, .{ .dense = true, .expand_children = false });
+    _ = backfill.label("A").gridCell(.{ .columnspan = 2 });
+    _ = backfill.label("B").gridCell(.{ .columnspan = 2 });
+    _ = backfill.label("C");
+    const d = try placeGrid(backfill, snapshot);
+    defer a.free(d.cells);
+    try std.testing.expectEqual(core.grid.Cell{ .row = 0, .column = 2 }, d.cells[2].?);
+
+    // Expansion grows right into free columns and down to the bottom row;
+    // oversized spans are clamped to the column count.
+    const grow = ui.grid(.{}).columns(2, .{});
+    _ = grow.label("A").gridCell(.{ .rowspan = 2 });
+    _ = grow.label("B");
+    _ = grow.label("C").gridCell(.{ .columnspan = 5 });
+    const g = try placeGrid(grow, snapshot);
+    defer a.free(g.cells);
+    try expectCells(&.{
+        .{ .row = 0, .column = 0, .rowspan = 2 },
+        .{ .row = 0, .column = 1, .rowspan = 2 },
+        .{ .row = 2, .column = 0, .columnspan = 2 },
+    }, g.cells);
+
+    try std.testing.expect(snapshot.failure == null);
+    _ = ui.label("x").gridCell(.{ .rowspan = 0 });
+    try std.testing.expectEqual(error.InvalidLayout, snapshot.failure.?);
 }

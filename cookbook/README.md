@@ -42,7 +42,8 @@ Zig adaptations of the examples, not a promise of identical C++ APIs.
 | VBox / HBox | Inverse order, Spacer, Divider, weights and gaps | — |
 | Label | Retained greeting visibility, colors, wrapping, literal text | — |
 | Button | Actions, disabled state, colors | — |
-| Grid | Equal columns, keyed reflow and editable cells | Explicit coordinates and spans |
+| Grid | Manual coordinates and row / column spans | — |
+| Adaptive Grid | Automatic placement, dense modes, expansion, keyed reflow and editable cells | Width breakpoints, radio buttons |
 | Checkbox | Shared boolean binding and disabled mirrors | Collection membership |
 | TextField | Immediate two-way text binding and shared editors | Editing buffer, numeric conversion |
 | Scroll | Dynamic keyed rows and retained scroll position | Offset API and end anchoring |

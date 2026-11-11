@@ -72,6 +72,15 @@ test "recipes bind native controls, preserve keys during reflow and retain model
     try app.flush();
     try std.testing.expectEqualStrings("user input", std.mem.span(c.lv_textarea_get_text(app.find("field-mirror").?)));
     try click(app, "page:grid");
+    const manual = app.find("example-grid").?;
+    c.lv_obj_update_layout(manual);
+    const a_tile = app.find("A").?;
+    const d_tile = app.find("D").?;
+    try std.testing.expectEqual(1, c.lv_obj_get_style_grid_cell_row_pos(app.find("C").?, c.LV_PART_MAIN));
+    try std.testing.expectEqual(2, c.lv_obj_get_style_grid_cell_column_span(app.find("B").?, c.LV_PART_MAIN));
+    try std.testing.expect(c.lv_obj_get_x(d_tile) > c.lv_obj_get_x(a_tile));
+    try std.testing.expectEqual(c.lv_obj_get_height(a_tile), c.lv_obj_get_height(d_tile));
+    try click(app, "page:adaptive_grid");
     const editor = app.find("grid-editor").?;
     const tile = app.find("A").?;
     c.lv_textarea_set_cursor_pos(editor, 4);
@@ -80,7 +89,17 @@ test "recipes bind native controls, preserve keys during reflow and retain model
     try std.testing.expectEqual(editor, app.find("grid-editor").?);
     try std.testing.expectEqual(4, c.lv_textarea_get_cursor_pos(editor));
     try std.testing.expectEqual(tile, app.find("A").?);
-    try std.testing.expectEqualStrings("E", std.mem.span(c.lv_label_get_text(c.lv_obj_get_child(app.find("example-grid").?, 0))));
+    try std.testing.expectEqualStrings("G\n2x2", std.mem.span(c.lv_label_get_text(c.lv_obj_get_child(app.find("adaptive-grid").?, 0))));
+    // Four columns, as in CPPUI's wide layout: F lands on the recipe's 1-based rows.
+    try check(app, "grid-reverse", false);
+    try click(app, "grid-columns");
+    try std.testing.expectEqual(3, c.lv_obj_get_style_grid_cell_row_pos(app.find("F").?, c.LV_PART_MAIN));
+    try click(app, "grid-mode");
+    try std.testing.expectEqual(2, c.lv_obj_get_style_grid_cell_row_pos(app.find("F").?, c.LV_PART_MAIN));
+    try click(app, "grid-mode");
+    try std.testing.expectEqual(4, c.lv_obj_get_style_grid_cell_row_pos(app.find("F").?, c.LV_PART_MAIN));
+    try check(app, "grid-show-c", false);
+    try std.testing.expect(c.lv_obj_has_flag(app.find("C").?, c.LV_OBJ_FLAG_HIDDEN));
     try click(app, "page:scroll");
     const scroller = app.find("scroller").?;
     c.lv_obj_update_layout(scroller);

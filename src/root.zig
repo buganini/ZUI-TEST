@@ -14,6 +14,7 @@ pub const ApplicationOptions = @import("lvgl/application.zig").ApplicationOption
 pub const Builder = core.Builder;
 pub const Layout = core.Layout;
 pub const Style = core.Style;
+pub const GridCell = core.GridCell;
 pub const State = core.State;
 pub const TextState = core.TextState;
 pub const Binding = core.Binding;

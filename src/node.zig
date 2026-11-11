@@ -52,6 +52,20 @@ pub const BoxOptions = struct {
 pub const GridOptions = struct {
     gap: i32 = default_gap,
 };
+/// `.gridCell()` arguments, mirroring PUI's `grid(row, column, rowspan,
+/// columnspan)`. Omitted fields keep their previous value. A manual Grid
+/// places children that have both a row and a column.
+pub const GridCell = struct {
+    row: ?u16 = null,
+    column: ?u16 = null,
+    rowspan: ?u16 = null,
+    columnspan: ?u16 = null,
+};
+/// `.columns(n, dense, expandChildren)` for automatic Grid placement.
+pub const ColumnsOptions = struct {
+    dense: ?bool = null,
+    expand_children: bool = true,
+};
 /// `Scroll(vertical, horizontal)`: null lets content decide, like PUI.
 pub const ScrollOptions = struct {
     vertical: ?bool = null,
@@ -81,7 +95,11 @@ pub const Options = struct {
     color: ?u32 = null,
     bg_color: ?u32 = null,
     font_size: ?u8 = null,
-    columns: u16 = 2,
+    grid: GridCell = .{},
+    /// Null keeps manual Grid placement.
+    columns: ?u16 = null,
+    dense: ?bool = null,
+    expand_children: bool = true,
     placeholder: ?[:0]const u8 = null,
     on_click: ?Callback = null,
 };
@@ -277,12 +295,25 @@ pub const Builder = struct {
         node.options.disabled = value;
         return self;
     }
-    /// Grid column count for automatic placement.
-    pub fn columns(self: Builder, value: u16) Builder {
+    /// Automatic Grid placement over `value` equal columns.
+    pub fn columns(self: Builder, value: u16, options: ColumnsOptions) Builder {
         const node = self.physical() orelse return self.inert();
         if (node.kind != .grid) return self.reject(error.InvalidModifier);
         if (value == 0) return self.reject(error.InvalidLayout);
         node.options.columns = value;
+        node.options.dense = options.dense;
+        node.options.expand_children = options.expand_children;
+        return self;
+    }
+    /// A Grid child's cell, like PUI's `.grid()`. Automatic Grids use only spans.
+    /// Declared coordinates join identity, as in PUI.
+    pub fn gridCell(self: Builder, cell: GridCell) Builder {
+        const node = self.physical() orelse return self.inert();
+        if (cell.rowspan == 0 or cell.columnspan == 0) return self.reject(error.InvalidLayout);
+        const target = &node.options.grid;
+        inline for (@typeInfo(GridCell).@"struct".field_names) |name| {
+            if (@field(cell, name)) |value| @field(target, name) = value;
+        }
         return self;
     }
     /// Bind a splitter's first-pane percentage, clamped to 10..90. Without a
@@ -397,7 +428,12 @@ pub fn sameIdentity(old: *const Node, next: *const Node, old_index: usize, next_
         const b = next.content.?;
         if (a.context != b.context or !std.mem.eql(u8, a.type_name, b.type_name)) return false;
     }
+    if (!std.meta.eql(gridIdentity(old), gridIdentity(next))) return false;
     if (next.options.id) |name|
         return if (old.options.id) |other| std.mem.eql(u8, name, other) else false;
     return old.options.id == null and old_index == next_index;
+}
+fn gridIdentity(declaration: *const Node) ?GridCell {
+    const cell = declaration.options.grid;
+    return if (cell.row != null and cell.column != null) cell else null;
 }

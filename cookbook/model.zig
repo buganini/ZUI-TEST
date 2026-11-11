@@ -12,6 +12,9 @@ pub const Model = struct {
     field_text: zui.TextState,
     grid_columns: zui.State(u16),
     grid_reverse: zui.State(bool),
+    grid_mode: zui.State(usize),
+    grid_show_c: zui.State(bool),
+    grid_expand: zui.State(bool),
     grid_text: zui.TextState,
     scroll_rows: zui.State(usize),
     split_horizontal: zui.State(u8),
@@ -37,6 +40,9 @@ pub const Model = struct {
             .checkbox_disabled = zui.State(bool).init(a, false),
             .field_text = field,
             .grid_columns = zui.State(u16).init(a, 2),
+            .grid_mode = zui.State(usize).init(a, 0),
+            .grid_show_c = zui.State(bool).init(a, true),
+            .grid_expand = zui.State(bool).init(a, true),
             .grid_reverse = zui.State(bool).init(a, false),
             .grid_text = grid,
             .scroll_rows = zui.State(usize).init(a, 100),
@@ -53,6 +59,9 @@ pub const Model = struct {
         self.split_horizontal.deinit();
         self.scroll_rows.deinit();
         self.grid_text.deinit();
+        self.grid_expand.deinit();
+        self.grid_show_c.deinit();
+        self.grid_mode.deinit();
         self.grid_reverse.deinit();
         self.grid_columns.deinit();
         self.field_text.deinit();

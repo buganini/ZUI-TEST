@@ -21,10 +21,12 @@ pub const Backend = struct {
         vertical: bool = false,
     };
 
-    /// LVGL keeps pointers to grid templates, so each update allocates them.
+    /// LVGL keeps pointers to grid templates, so each update allocates them,
+    /// along with the cell of each physical child.
     pub const Layout = struct {
         columns: []i32,
         rows: []i32,
+        cells: []?core.grid.Cell,
     };
 
     pub fn rootParent() Parent {
@@ -91,22 +93,26 @@ pub const Backend = struct {
         widget.layout = null;
     }
 
-    pub fn prepareLayout(allocator: Allocator, declaration: *const Declaration, child_count: usize) !?Layout {
+    pub fn prepareLayout(allocator: Allocator, declaration: *const Declaration, children: []const *const Declaration) !?Layout {
         if (declaration.kind != .grid) return null;
-        const count = declaration.options.columns;
-        const columns = try allocator.alloc(i32, @as(usize, count) + 1);
+        const placement = try core.grid.place(allocator, declaration, children);
+        errdefer allocator.free(placement.cells);
+        // Equal columns; rows fit their single-row content.
+        const columns = try tracks(allocator, @max(1, placement.columns), c.LV_GRID_FR(1));
         errdefer allocator.free(columns);
-        for (columns[0..count]) |*entry| entry.* = c.LV_GRID_FR(1);
-        columns[count] = c.LV_GRID_TEMPLATE_LAST;
-        const row_count = @max(1, (child_count + count - 1) / count);
-        const rows = try allocator.alloc(i32, row_count + 1);
-        for (rows[0..row_count]) |*entry| entry.* = c.LV_GRID_CONTENT;
-        rows[row_count] = c.LV_GRID_TEMPLATE_LAST;
-        return .{ .columns = columns, .rows = rows };
+        const rows = try tracks(allocator, @max(1, placement.rows), c.LV_GRID_CONTENT);
+        return .{ .columns = columns, .rows = rows, .cells = placement.cells };
+    }
+    fn tracks(allocator: Allocator, count: u32, size: i32) ![]i32 {
+        const result = try allocator.alloc(i32, @as(usize, count) + 1);
+        @memset(result[0..count], size);
+        result[count] = c.LV_GRID_TEMPLATE_LAST;
+        return result;
     }
     pub fn freeLayout(allocator: Allocator, layout: Layout) void {
         allocator.free(layout.columns);
         allocator.free(layout.rows);
+        allocator.free(layout.cells);
     }
 
     fn isContainer(kind: core.node.Kind) bool {
@@ -239,9 +245,13 @@ pub const Backend = struct {
                 const ratio = parent.split_ratio;
                 c.lv_obj_set_flex_grow(object, if (index == 0) ratio else 100 - ratio);
             },
-            .grid => {
-                const columns = declaration.options.columns;
-                c.lv_obj_set_grid_cell(object, c.LV_GRID_ALIGN_STRETCH, @intCast(index % columns), 1, c.LV_GRID_ALIGN_START, @intCast(index / columns), 1);
+            .grid => if (parent.layout.?.cells[index]) |cell| {
+                // Spanning rows don't size content tracks, so those cells stretch.
+                const y_align: c.lv_grid_align_t = if (cell.rowspan > 1) c.LV_GRID_ALIGN_STRETCH else c.LV_GRID_ALIGN_START;
+                c.lv_obj_set_grid_cell(object, c.LV_GRID_ALIGN_STRETCH, @intCast(cell.column), @intCast(cell.columnspan), y_align, @intCast(cell.row), @intCast(cell.rowspan));
+            } else {
+                // Like PUI's backends, a manual Grid leaves out children without a cell.
+                c.lv_obj_add_flag(object, c.LV_OBJ_FLAG_HIDDEN);
             },
             else => {},
         }
@@ -258,10 +268,46 @@ pub const Backend = struct {
     pub fn finish(widget: *Widget, declaration: *const Declaration) void {
         const object = widget.object;
         if (declaration.kind == .splitter) c.lv_obj_move_to_index(widget.inner.?, 1);
+        if (declaration.kind == .grid) fitRows(object, widget.layout.?);
         if (declaration.options.visible)
             c.lv_obj_remove_flag(object, c.LV_OBJ_FLAG_HIDDEN)
         else
             c.lv_obj_add_flag(object, c.LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /// LVGL's content tracks ignore spanning cells, so rows covered only by
+    /// spans would collapse. Like CPPUI, size single-row cells first, then share
+    /// each span's unmet height evenly across its rows.
+    fn fitRows(object: *c.lv_obj_t, layout: Layout) void {
+        const rows = layout.rows[0 .. layout.rows.len - 1];
+        @memset(rows, 0);
+        const gap = c.lv_obj_get_style_pad_row(object, c.LV_PART_MAIN);
+        const count = c.lv_obj_get_child_count(object);
+        var span: i32 = 1;
+        while (span <= rows.len) : (span += 1) {
+            var index: u32 = 0;
+            while (index < count) : (index += 1) {
+                const child = c.lv_obj_get_child(object, @intCast(index)).?;
+                if (c.lv_obj_has_flag(child, c.LV_OBJ_FLAG_HIDDEN) or c.lv_obj_has_flag(child, c.LV_OBJ_FLAG_IGNORE_LAYOUT)) continue;
+                if (c.lv_obj_get_style_grid_cell_row_span(child, c.LV_PART_MAIN) != span) continue;
+                const start: usize = @intCast(c.lv_obj_get_style_grid_cell_row_pos(child, c.LV_PART_MAIN));
+                const covered = rows[start..@min(rows.len, start + @as(usize, @intCast(span)))];
+                const height = c.lv_obj_calc_dynamic_height(child, c.LV_STYLE_HEIGHT) +
+                    c.lv_obj_get_style_margin_top(child, c.LV_PART_MAIN) + c.lv_obj_get_style_margin_bottom(child, c.LV_PART_MAIN);
+                var available: i32 = gap * (span - 1);
+                for (covered) |row| available += row;
+                var extra: i32 = @max(0, height - available);
+                var remaining: i32 = @intCast(covered.len);
+                for (covered) |*row| {
+                    const share = @divTrunc(extra, remaining);
+                    row.* += share;
+                    extra -= share;
+                    remaining -= 1;
+                }
+            }
+        }
+        c.lv_obj_set_grid_dsc_array(object, layout.columns.ptr, layout.rows.ptr);
+        c.lv_obj_mark_layout_as_dirty(object);
     }
 
     fn Callbacks(comptime Mounted: type) type {

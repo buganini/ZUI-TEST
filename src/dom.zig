@@ -14,7 +14,8 @@ const Snapshot = node.Snapshot;
 ///   `parentOf(*Widget)` a container's.
 /// - `Native` and `native(*Widget)`: the handle returned by `find()`.
 /// - `Layout`: per-update storage for a container, prepared before anything is
-///   committed; `prepareLayout(allocator, declaration, physical_children)` and
+///   committed; `prepareLayout(allocator, declaration, physical_children)`,
+///   which receives the declarations of its physical children in order, and
 ///   `freeLayout(allocator, layout)`.
 /// - `create(mounted, parent) !Widget` and `destroy(allocator, mounted)`.
 /// - `update(allocator, *Widget, declaration, ?Layout)`, which takes ownership
@@ -202,17 +203,19 @@ pub fn Dom(comptime Backend: type) type {
                 plan.children[index] = try self.prepare(match, child, child_parent, child_owner, arena);
                 plan.prepared += 1;
             }
-            const child_count = physicalChildCount(plan);
-            if (declaration.kind == .splitter and child_count != 2) return error.InvalidPaneCount;
-            if (plan.mounted.widget != null)
-                plan.layout = try Backend.prepareLayout(self.allocator, declaration, child_count);
+            if (plan.mounted.widget != null) {
+                var physical = std.ArrayListUnmanaged(*const Declaration).empty;
+                try collectPhysical(plan, arena, &physical);
+                if (declaration.kind == .splitter and physical.items.len != 2) return error.InvalidPaneCount;
+                plan.layout = try Backend.prepareLayout(self.allocator, declaration, physical.items);
+            }
             return plan;
         }
-        fn physicalChildCount(plan: *Plan) usize {
-            var count: usize = 0;
-            for (plan.children) |child|
-                count += if (child.mounted.view != null) physicalChildCount(child) else 1;
-            return count;
+        // The same flattening as placeChild(), over declarations not yet committed.
+        fn collectPhysical(plan: *Plan, arena: Allocator, out: *std.ArrayListUnmanaged(*const Declaration)) !void {
+            for (plan.children) |child| {
+                if (child.mounted.view != null) try collectPhysical(child, arena, out) else try out.append(arena, child.declaration);
+            }
         }
 
         fn discard(self: *Self, plan: *Plan) void {

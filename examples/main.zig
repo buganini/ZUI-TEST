@@ -46,7 +46,7 @@ pub const Demo = struct {
         _ = counter.button("+").id("increment").click(zui.callback(self, increment));
 
         _ = page.checkbox("Show greeting", self.show.binding()).id("show");
-        const form = page.grid(.{}).columns(2);
+        const form = page.grid(.{}).columns(2, .{});
         _ = form.label("Your name");
         _ = form.textField(self.name.binding()).id("name");
         if (self.show.get(ui))

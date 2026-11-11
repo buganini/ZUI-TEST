@@ -52,7 +52,7 @@ const Model = struct {
             const i = if (self.reversed) self.length - 1 - index else index;
             _ = list.label(keys[i]).id(keys[i]);
         }
-        const grid = box.grid(.{}).id("grid").columns(2);
+        const grid = box.grid(.{}).id("grid").columns(2, .{});
         _ = grid.label("first");
         _ = grid.label("second");
         const scroll = box.scroll(.{}).id("scroll").layout(.{ .height = 60 });
@@ -193,7 +193,7 @@ test "void content runs to completion before deferred errors reject the tree and
             _ = ui.labelFmt("Value: {d}", .{value}).id("value");
             if (self.fail) {
                 _ = ui.button("Duplicate").id("value");
-                const invalid = ui.grid(.{}).columns(0);
+                const invalid = ui.grid(.{}).columns(0, .{});
                 const nested = invalid.vbox(.{});
                 _ = nested.label("Ignored");
                 ui.fail(error.LaterError);
