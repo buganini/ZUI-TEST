@@ -9,7 +9,7 @@ pub fn checkMutation() !void {
 
 pub const Signal = struct {
     allocator: Allocator,
-    observers: std.ArrayList(*Observer) = .empty,
+    observers: std.ArrayListUnmanaged(*Observer) = std.ArrayListUnmanaged(*Observer).empty,
 
     pub fn init(allocator: Allocator) Signal {
         return .{ .allocator = allocator };
@@ -33,7 +33,7 @@ pub const Signal = struct {
 
 pub const Observer = struct {
     allocator: Allocator,
-    dependencies: std.ArrayList(*Signal) = .empty,
+    dependencies: std.ArrayListUnmanaged(*Signal) = std.ArrayListUnmanaged(*Signal).empty,
     dirty: bool = true,
 
     pub fn init(allocator: Allocator) Observer {
@@ -91,7 +91,7 @@ pub fn State(comptime T: type) type {
         const Self = @This();
 
         pub fn init(allocator: Allocator, value: T) Self {
-            return .{ .value = value, .signal = .init(allocator) };
+            return .{ .value = value, .signal = Signal.init(allocator) };
         }
         pub fn deinit(self: *Self) void {
             self.signal.deinit();
@@ -128,7 +128,7 @@ pub const TextState = struct {
     signal: Signal,
 
     pub fn init(allocator: Allocator, text: []const u8) !TextState {
-        return .{ .value = try allocator.dupe(u8, text), .signal = .init(allocator) };
+        return .{ .value = try allocator.dupe(u8, text), .signal = Signal.init(allocator) };
     }
     pub fn deinit(self: *TextState) void {
         self.signal.allocator.free(self.value);
@@ -197,7 +197,7 @@ pub const Declaration = struct {
     checked: bool = false,
     bool_binding: ?Binding(bool) = null,
     text_binding: ?Binding([]const u8) = null,
-    children: std.ArrayList(*Declaration) = .empty,
+    children: std.ArrayListUnmanaged(*Declaration) = std.ArrayListUnmanaged(*Declaration).empty,
 };
 
 /// Each render owns its declarations, copied keys, copied text and dependencies.
@@ -206,13 +206,13 @@ pub const Snapshot = struct {
     allocator: Allocator,
     arena: std.heap.ArenaAllocator,
     root: Declaration,
-    dependencies: std.ArrayList(*Signal) = .empty,
+    dependencies: std.ArrayListUnmanaged(*Signal) = std.ArrayListUnmanaged(*Signal).empty,
 
     pub fn create(allocator: Allocator) !*Snapshot {
         const self = try allocator.create(Snapshot);
         self.* = .{
             .allocator = allocator,
-            .arena = .init(allocator),
+            .arena = std.heap.ArenaAllocator.init(allocator),
             .root = .{ .kind = .root, .options = .{}, .text = "" },
         };
         return self;
@@ -252,7 +252,9 @@ pub const Builder = struct {
         }
         const allocator = self.snapshot.arena.allocator();
         const node = try allocator.create(Declaration);
-        node.* = .{ .kind = kind, .options = options, .text = try allocator.dupeSentinel(u8, text, 0) };
+        const copied_text = try allocator.allocSentinel(u8, text.len, 0);
+        @memcpy(copied_text, text);
+        node.* = .{ .kind = kind, .options = options, .text = copied_text };
         if (options.key) |key| node.options.key = try allocator.dupe(u8, key);
         try self.parent.children.append(allocator, node);
         return node;

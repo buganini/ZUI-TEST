@@ -20,11 +20,11 @@ const Model = struct {
 
     fn init(allocator: std.mem.Allocator) !Model {
         return .{
-            .count = .init(allocator, 1),
-            .alternate = .init(allocator, 7),
-            .checked = .init(allocator, true),
-            .show = .init(allocator, true),
-            .text = try .init(allocator, "initial"),
+            .count = zui.State(i32).init(allocator, 1),
+            .alternate = zui.State(i32).init(allocator, 7),
+            .checked = zui.State(bool).init(allocator, true),
+            .show = zui.State(bool).init(allocator, true),
+            .text = try zui.TextState.init(allocator, "initial"),
         };
     }
     fn deinit(self: *Model) void {

@@ -17,7 +17,7 @@ const Mounted = struct {
     object: ?*c.lv_obj_t = null,
     label: ?*c.lv_obj_t = null,
     declaration: *Declaration,
-    children: std.ArrayList(*Mounted) = .empty,
+    children: std.ArrayListUnmanaged(*Mounted) = std.ArrayListUnmanaged(*Mounted).empty,
 };
 
 const Plan = struct {
@@ -61,7 +61,7 @@ pub const App = struct {
             .allocator = allocator,
             .host = host,
             .context = model,
-            .observer = .init(allocator),
+            .observer = core.Observer.init(allocator),
             .build_fn = struct {
                 fn build(raw: *anyopaque, ui: *Builder) !void {
                     const context: T = @ptrCast(@alignCast(raw));

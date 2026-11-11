@@ -2,7 +2,7 @@
 
 A Zig declarative UI framework developed after PUI/CPPUI, targeting LVGL.
 
-Requires Zig 0.17.1. The core provides a declaration builder, keyed identity,
+Targets Zig 0.17.1; also tested with Zig 0.14.1. The core provides a declaration builder, keyed identity,
 reactive State/Binding, owned TextState and transactional dependency replacement.
 
 ```sh

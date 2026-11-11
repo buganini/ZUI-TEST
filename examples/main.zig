@@ -13,18 +13,18 @@ pub const Demo = struct {
 
     pub fn init(allocator: std.mem.Allocator) !Demo {
         var self: Demo = .{
-            .count = .init(allocator, 0),
-            .show = .init(allocator, true),
-            .name = try .init(allocator, "Zig"),
-            .length = .init(allocator, 3),
-            .reversed = .init(allocator, false),
+            .count = zui.State(i32).init(allocator, 0),
+            .show = zui.State(bool).init(allocator, true),
+            .name = try zui.TextState.init(allocator, "Zig"),
+            .length = zui.State(usize).init(allocator, 3),
+            .reversed = zui.State(bool).init(allocator, false),
             .items = undefined,
         };
         errdefer self.name.deinit();
         var initialized: usize = 0;
         errdefer for (self.items[0..initialized]) |*item| item.deinit();
         for (&self.items, keys) |*item, key| {
-            item.* = try .init(allocator, key);
+            item.* = try zui.TextState.init(allocator, key);
             initialized += 1;
         }
         return self;
@@ -85,7 +85,7 @@ pub const Demo = struct {
 };
 
 pub fn main() !void {
-    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .{};
     defer std.debug.assert(debug_allocator.deinit() == .ok);
     const allocator = debug_allocator.allocator();
     var demo = try Demo.init(allocator);

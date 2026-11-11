@@ -12,20 +12,21 @@ pub fn build(b: *std.Build) void {
     const core_run = b.addRunArtifact(core_tests);
     b.step("test-core", "Test the reactive core without LVGL").dependOn(&core_run.step);
 
-    const lvgl_dir = b.pathResolve(&.{b.option([]const u8, "lvgl-dir", "LVGL 9.6.0 source directory") orelse "deps/lvgl"});
-    const configure = b.addSystemCommand(&.{ "cmake", "-S" });
-    configure.addDirectoryArg(b.path("native"));
-    configure.addArg("-B");
-    const native_dir = configure.addOutputDirectoryArg("native");
-    configure.addArgs(&.{ b.fmt("-DZUI_LVGL_DIR={s}", .{lvgl_dir}), "-DCMAKE_BUILD_TYPE=Debug" });
-    const native_build = b.addSystemCommand(&.{ "cmake", "--build" });
-    native_build.addDirectoryArg(native_dir);
-    native_build.addArgs(&.{ "--parallel", "4" });
-
-    configure.addFileInput(b.path("native/CMakeLists.txt"));
-    configure.addFileInput(b.path("native/lv_conf.h"));
-    configure.addFileInput(b.path("native/host.h"));
-    configure.addFileInput(b.path("native/host.c"));
+    const lvgl_input = b.option([]const u8, "lvgl-dir", "LVGL 9.6.0 source directory") orelse "deps/lvgl";
+    const lvgl_dir: std.Build.LazyPath = if (std.fs.path.isAbsolute(lvgl_input))
+        .{ .cwd_relative = lvgl_input }
+    else
+        b.path(lvgl_input);
+    const native_build = b.addSystemCommand(&.{"sh"});
+    native_build.addFileArg(b.path("native/build.sh"));
+    native_build.addDirectoryArg(b.path("native"));
+    native_build.addDirectoryArg(lvgl_dir);
+    const native_dir = native_build.addOutputDirectoryArg("native");
+    native_build.addArg(if (std.mem.eql(u8, @tagName(optimize), "Debug") or std.mem.eql(u8, @tagName(optimize), "debug")) "Debug" else "RelWithDebInfo");
+    // CMake tracks changes inside the user's LVGL checkout on every invocation.
+    native_build.has_side_effects = true;
+    for ([_][]const u8{ "CMakeLists.txt", "lv_conf.h", "host.h", "host.c", "import.h" }) |file|
+        native_build.addFileInput(b.path(b.fmt("native/{s}", .{file})));
 
     const c = b.addTranslateC(.{
         .root_source_file = b.path("native/import.h"),
@@ -33,7 +34,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     c.addIncludePath(b.path("native"));
-    c.addIncludePath(.{ .cwd_relative = lvgl_dir });
+    c.addIncludePath(lvgl_dir);
     const cmod = c.createModule();
     const zui = b.addModule("zui", .{
         .root_source_file = b.path("src/root.zig"),
@@ -54,13 +55,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "zui", .module = zui }},
     }) });
-    app.step.dependOn(&native_build.step);
     b.installArtifact(app);
     const run = b.addRunArtifact(app);
     b.step("run", "Run the LVGL counter, form and keyed-list demo").dependOn(&run.step);
 
     const tests = b.addTest(.{ .root_module = zui });
-    tests.step.dependOn(&native_build.step);
     const test_run = b.addRunArtifact(tests);
     test_run.setEnvironmentVariable("SDL_VIDEODRIVER", "dummy");
     test_run.setEnvironmentVariable("SDL_AUDIODRIVER", "dummy");
@@ -69,7 +68,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&core_run.step);
     test_step.dependOn(&test_run.step);
     const demo_tests = b.addTest(.{ .root_module = app.root_module });
-    demo_tests.step.dependOn(&native_build.step);
     const demo_run = b.addRunArtifact(demo_tests);
     demo_run.setEnvironmentVariable("SDL_VIDEODRIVER", "dummy");
     demo_run.setEnvironmentVariable("SDL_AUDIODRIVER", "dummy");
