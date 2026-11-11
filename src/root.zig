@@ -132,6 +132,13 @@ pub const App = struct {
         try self.flush();
         return true;
     }
+    /// Render the current UI and save an SDL bitmap for headless visual checks.
+    pub fn saveScreenshot(self: *App, path: [:0]const u8) !void {
+        try self.flush();
+        c.lv_refr_now(null);
+        if (!c.zui_host_save_bmp(self.host, path)) return error.ScreenshotFailed;
+    }
+
     pub fn run(self: *App) !void {
         while (try self.pump()) c.zui_host_delay(8);
     }

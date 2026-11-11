@@ -10,4 +10,5 @@ void zui_host_request_close(zui_host *host);
 void zui_host_push_quit(void);
 uint32_t zui_host_pump(zui_host *host);
 void zui_host_delay(uint32_t milliseconds);
+bool zui_host_save_bmp(zui_host *host, const char *path);
 #endif

@@ -59,18 +59,42 @@ pub fn build(b: *std.Build) void {
     const run = b.addRunArtifact(app);
     b.step("run", "Run the LVGL counter, form and keyed-list demo").dependOn(&run.step);
 
-    const tests = b.addTest(.{ .root_module = zui });
+    const capture = b.addExecutable(.{ .name = "zui-capture", .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/capture.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "zui", .module = zui }},
+    }) });
+    const capture_run = b.addRunArtifact(capture);
+    capture_run.setCwd(b.path("."));
+    const capture_dir = b.addSystemCommand(&.{ "mkdir", "-p", ".build" });
+    capture_dir.setCwd(b.path("."));
+    capture_run.step.dependOn(&capture_dir.step);
+    headless(capture_run);
+    b.step("snapshot", "Render the demo to .build/demo.bmp with SDL's dummy driver").dependOn(&capture_run.step);
+
+    const tests = b.addTest(.{ .root_module = zui, .use_llvm = true });
     const test_run = b.addRunArtifact(tests);
-    test_run.setEnvironmentVariable("SDL_VIDEODRIVER", "dummy");
-    test_run.setEnvironmentVariable("SDL_AUDIODRIVER", "dummy");
-    test_run.setEnvironmentVariable("SDL_RENDER_DRIVER", "software");
+    headless(test_run);
     const test_step = b.step("test", "Run core and LVGL integration tests");
     test_step.dependOn(&core_run.step);
     test_step.dependOn(&test_run.step);
-    const demo_tests = b.addTest(.{ .root_module = app.root_module });
+    const demo_tests = b.addTest(.{ .root_module = app.root_module, .use_llvm = true });
     const demo_run = b.addRunArtifact(demo_tests);
-    demo_run.setEnvironmentVariable("SDL_VIDEODRIVER", "dummy");
-    demo_run.setEnvironmentVariable("SDL_AUDIODRIVER", "dummy");
-    demo_run.setEnvironmentVariable("SDL_RENDER_DRIVER", "software");
+    headless(demo_run);
     test_step.dependOn(&demo_run.step);
+
+    const memcheck = b.step("memcheck", "Check LVGL and demo tests with Valgrind");
+    for ([_]*std.Build.Step.Compile{ tests, demo_tests }) |artifact| {
+        const check = b.addSystemCommand(&.{ "valgrind", "--quiet", "--leak-check=full", "--show-leak-kinds=definite,indirect,possible", "--errors-for-leak-kinds=definite,indirect,possible", "--error-exitcode=1" });
+        check.addArtifactArg(artifact);
+        headless(check);
+        memcheck.dependOn(&check.step);
+    }
+}
+
+fn headless(run: *std.Build.Step.Run) void {
+    run.setEnvironmentVariable("SDL_VIDEODRIVER", "dummy");
+    run.setEnvironmentVariable("SDL_AUDIODRIVER", "dummy");
+    run.setEnvironmentVariable("SDL_RENDER_DRIVER", "software");
 }

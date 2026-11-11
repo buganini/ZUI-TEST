@@ -67,3 +67,15 @@ void zui_host_request_close(zui_host *host) { SDL_AtomicSet(&host->closing, 1); 
 void zui_host_push_quit(void) { SDL_Event event = {0}; event.type = SDL_QUIT; SDL_PushEvent(&event); }
 uint32_t zui_host_pump(zui_host *host) { return zui_host_closing(host) ? 0 : lv_timer_handler(); }
 void zui_host_delay(uint32_t milliseconds) { SDL_Delay(milliseconds); }
+
+bool zui_host_save_bmp(zui_host *host, const char *path) {
+    SDL_Renderer *renderer = lv_sdl_window_get_renderer(host->display);
+    int width, height;
+    if(!renderer || SDL_GetRendererOutputSize(renderer, &width, &height)) return false;
+    SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_ARGB8888);
+    if(!surface) return false;
+    bool ok = SDL_RenderReadPixels(renderer, NULL, surface->format->format, surface->pixels, surface->pitch) == 0;
+    if(ok) ok = SDL_SaveBMP(surface, path) == 0;
+    SDL_FreeSurface(surface);
+    return ok;
+}
