@@ -1,0 +1,7 @@
+.{
+    .name = .zui,
+    .fingerprint = 0xc00160dbb5c4b4ae,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.17.1",
+    .paths = .{ "build.zig", "build.zig.zon", "src", "native", "examples", "README.md", ".zigversion" },
+}
