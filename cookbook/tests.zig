@@ -66,7 +66,7 @@ test "recipes bind native controls, preserve keys during reflow and retain model
     try std.testing.expect(!c.lv_obj_has_state(app.find("checkbox-disabled-mirror").?, c.LV_STATE_CHECKED));
     try click(app, "page:label");
     try check(app, "greeting-toggle", false);
-    try std.testing.expect(app.find("greeting") == null);
+    try std.testing.expect(c.lv_obj_has_flag(app.find("greeting").?, c.LV_OBJ_FLAG_HIDDEN));
     try click(app, "page:textfield");
     c.lv_textarea_set_text(app.find("field-model").?, "user input");
     try app.flush();
@@ -141,4 +141,32 @@ test "Reload reads disk changes and missing or invalid source stays recoverable"
     try temporary.dir.writeFile(io, .{ .sub_path = "vbox.zig", .data = "// recovered" });
     try click(app, "reload");
     try std.testing.expectEqualStrings("// recovered", text(app, "source-code"));
+}
+
+test "Views recipe updates one counter and retains hidden pages and editor carets" {
+    var gallery = try cookbook.Gallery.init(a, io, cookbook.source_directory);
+    defer gallery.deinit();
+    try gallery.selectKey("views");
+    const app = try zui.App.create(a, &gallery, .{});
+    defer app.destroy();
+    try app.flush();
+    const first = app.findView("view-a").?;
+    const second = app.findView("view-b").?;
+    const page = app.find("view-page-a").?;
+    const editor = c.lv_obj_get_child(page, 2);
+    c.lv_textarea_set_cursor_pos(editor, 1);
+    try click(app, "A");
+    try std.testing.expectEqual(1, gallery.model.pages.a.count.peek());
+    try std.testing.expectEqual(1, app.dom.view.render_count);
+    try std.testing.expectEqual(2, first.render_count);
+    try std.testing.expectEqual(1, second.render_count);
+    try check(app, "view-switch", true);
+    try std.testing.expect(c.lv_obj_has_flag(page, c.LV_OBJ_FLAG_HIDDEN));
+    try click(app, "B");
+    try check(app, "view-switch", false);
+    try std.testing.expectEqual(first, app.findView("view-a").?);
+    try std.testing.expectEqual(editor, c.lv_obj_get_child(page, 2));
+    try std.testing.expectEqual(1, c.lv_textarea_get_cursor_pos(editor));
+    try std.testing.expectEqual(2, first.render_count);
+    try std.testing.expectEqual(2, second.render_count);
 }

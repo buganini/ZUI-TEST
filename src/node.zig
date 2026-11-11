@@ -18,7 +18,7 @@ pub fn callback(context: anytype, comptime function: anytype) Callback {
     }.invoke };
 }
 
-pub const Kind = enum { root, column, row, grid, scroll, splitter, label, button, checkbox, text_field };
+pub const Kind = enum { view, root, column, row, grid, scroll, splitter, label, button, checkbox, text_field };
 
 pub const Options = struct {
     key: ?[]const u8 = null,
@@ -29,6 +29,8 @@ pub const Options = struct {
     padding: i32 = 0,
     gap: i32 = 8,
     grow: u8 = 0,
+    /// Hide without removing the retained node or its native control.
+    visible: bool = true,
     disabled: bool = false,
     selected: bool = false,
     vertical: bool = false,
@@ -39,10 +41,13 @@ pub const Options = struct {
     on_click: ?Callback = null,
 };
 
+pub const ViewOptions = struct { key: ?[]const u8 = null };
+
 pub const Node = struct {
     kind: Kind,
     options: Options,
     text: [:0]const u8,
+    content: ?@import("view.zig").Content = null,
     checked: bool = false,
     bool_binding: ?Binding(bool) = null,
     text_binding: ?Binding([]const u8) = null,
@@ -153,6 +158,12 @@ pub const Builder = struct {
     fn container(self: *Builder, kind: Kind, options: Options) Builder {
         return .{ .snapshot = self.snapshot, .parent = self.add(kind, "", options) };
     }
+    /// A virtual subtree with its own subscriptions. No native wrapper is added.
+    /// The borrowed model must remain at a stable address until removal.
+    pub fn view(self: *Builder, model: anytype, options: ViewOptions) void {
+        const node = self.add(.view, "", .{ .key = options.key }) orelse return;
+        node.content = @import("view.zig").Content.init(model);
+    }
     pub fn vbox(self: *Builder, options: Options) Builder {
         return self.container(.column, options);
     }
@@ -208,6 +219,11 @@ pub const Builder = struct {
 
 pub fn sameIdentity(old: *const Node, next: *const Node, old_index: usize, next_index: usize) bool {
     if (old.kind != next.kind) return false;
+    if (next.kind == .view) {
+        const a = old.content.?;
+        const b = next.content.?;
+        if (a.context != b.context or !std.mem.eql(u8, a.type_name, b.type_name)) return false;
+    }
     if (next.options.key) |key|
         return if (old.options.key) |other| std.mem.eql(u8, key, other) else false;
     return old.options.key == null and old_index == next_index;

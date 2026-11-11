@@ -17,13 +17,17 @@ pub const Model = struct {
     split_horizontal: zui.State(u8),
     split_vertical: zui.State(u8),
     external: External,
+    pages: @import("views.zig").Pages,
 
     pub fn init(a: std.mem.Allocator) !Model {
         var field = try zui.TextState.init(a, "1.23");
         errdefer field.deinit();
         var grid = try zui.TextState.init(a, "This editor survives reflow");
         errdefer grid.deinit();
+        var pages = try @import("views.zig").Pages.init(a);
+        errdefer pages.deinit();
         return .{
+            .pages = pages,
             .inverse_h = zui.State(bool).init(a, false),
             .inverse_v = zui.State(bool).init(a, false),
             .greeting_visible = zui.State(bool).init(a, true),
@@ -43,6 +47,7 @@ pub const Model = struct {
     }
 
     pub fn deinit(self: *Model) void {
+        self.pages.deinit();
         self.external.deinit();
         self.split_vertical.deinit();
         self.split_horizontal.deinit();

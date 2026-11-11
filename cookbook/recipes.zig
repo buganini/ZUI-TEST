@@ -36,7 +36,7 @@ pub const all = [_]Recipe{
     .{ .key = "canvas", .title = "Canvas", .remaining = "Painter and input APIs" },
     .{ .key = "image", .title = "Image", .remaining = "Image resources" },
     .{ .key = "tab", .title = "Tab", .remaining = "Tabs and selection" },
-    .{ .key = "views", .title = "Views", .remaining = "Retained inactive pages" },
+    .{ .key = "views", .title = "Views", .content = @import("views.zig").content, .remaining = "Suspending hidden View updates" },
     .{ .key = "refs", .title = "Refs", .remaining = "Typed references" },
     .{ .key = "table", .title = "Table", .remaining = "Table data and identity" },
     .{ .key = "table_adapter", .title = "Table (Adapter)", .remaining = "Table adapter" },

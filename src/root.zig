@@ -19,4 +19,5 @@ pub const callback = core.callback;
 
 test {
     _ = @import("integration_tests.zig");
+    _ = @import("view_tests.zig");
 }

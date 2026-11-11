@@ -6,11 +6,12 @@ const state = @import("state.zig");
 /// address until the View is removed.
 pub const Content = struct {
     context: *anyopaque,
+    type_name: []const u8,
     invoke: *const fn (*anyopaque, *node.Builder) void,
 
     pub fn init(model: anytype) Content {
         const T = @TypeOf(model);
-        return .{ .context = model, .invoke = struct {
+        return .{ .context = model, .type_name = @typeName(T), .invoke = struct {
             fn content(raw: *anyopaque, ui: *node.Builder) void {
                 const context: T = @ptrCast(@alignCast(raw));
                 const result = context.content(ui);

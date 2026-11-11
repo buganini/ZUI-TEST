@@ -40,13 +40,14 @@ Zig adaptations of the examples, not a promise of identical C++ APIs.
 | Recipe | Demonstrates | Still to port |
 | --- | --- | --- |
 | VBox / HBox | Spacing, keyed reversal, flex growth | — |
-| Label | Conditional greeting, colors, wrapping, literal text | — |
+| Label | Retained greeting visibility, colors, wrapping, literal text | — |
 | Button | Actions, disabled state, colors | — |
 | Grid | Equal columns, keyed reflow and editable cells | Explicit coordinates and spans |
 | Checkbox | Shared boolean binding and disabled mirrors | Collection membership |
 | TextField | Immediate two-way text binding and shared editors | Editing buffer, numeric conversion |
 | Scroll | Dynamic keyed rows and retained scroll position | Offset API and end anchoring |
 | State Binding | External getter/setter, notifications, latest 100 setter logs | Radio / combobox examples |
+| Views | Independent View subscriptions and retained hidden pages | Suspending hidden View updates |
 | Splitter | Nested horizontal / vertical two-pane splitters | More than two panes per splitter |
 
 Unported recipes stay visible with a description of the missing capability.
@@ -66,7 +67,7 @@ page preserves keyed control identity and editor caret position.
 - `capture.zig`: headless screenshots of implemented pages and a fallback page.
 
 Declarations and tracked reads omit `try`: Builder records the first error and
-App checks it when the gallery's `content()` returns. A recipe can report its
+Each View checks it when its own `content()` returns. A recipe can report its
 own failure with `ui.fail(err)`. Event callbacks still propagate State write
 errors explicitly.
 
@@ -79,4 +80,6 @@ zig build snapshot -Dlvgl-dir=../CPPUI/lvgl-9.6.0
 These use SDL's dummy/software drivers and do not need a desktop session.
 Snapshots are written to `.build/cookbook-<key>.bmp`. The checks exercise every
 sidebar entry, live bindings, keyed reflow, navigation state, a narrower window,
-source reload, missing/invalid files and bounded external-binding logs.
+source reload, missing/invalid files, bounded external-binding logs and independently
+updated Views. The Views recipe keeps both pages mounted using `.visible`; an
+`if` around a declaration would remove it. Hidden Views currently keep updating.

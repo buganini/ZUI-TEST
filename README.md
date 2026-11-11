@@ -6,11 +6,11 @@ ZUI is a declarative UI framework in Zig, developed after
 It currently targets **LVGL**, with an SDL2 desktop host on Linux.
 
 The first working version includes reactive state and two-way bindings,
-keyed widget reuse, HBox/VBox, Grid, Scroll, Splitter, Label, Button, Checkbox and TextField.
+independent retained Views, keyed widget reuse, HBox/VBox, Grid, Scroll, Splitter, Label, Button, Checkbox and TextField.
 The [cookbook](cookbook/README.md) follows
 [CPPUI's cookbook](https://github.com/buganini/CPPUI/tree/main/cookbook): a
 scrollable example list, draggable Code / Result panes and runtime source reload.
-Ten interactive recipes are available; the remaining pages show their missing
+Eleven interactive recipes are available; the remaining pages show their missing
 capabilities. A smaller demo combines a counter, a form and keyed editors.
 
 ## Build and run
@@ -78,7 +78,7 @@ zig build snapshot -Dlvgl-dir=../CPPUI/lvgl-9.6.0
 
 `test` covers state subscriptions, coalesced updates, builder failures,
 checkbox/text bindings, caret retention, keyed reordering/removal, native
-subtree deletion, deferred SDL quit, splitter pointer/keyboard resizing, cookbook navigation,
+subtree deletion, isolated View updates, visibility retention, deferred SDL quit, splitter pointer/keyboard resizing, cookbook navigation,
 source reload and the complete demo. Allocation-failure
 checks exercise every Zig allocation on representative build/update paths.
 Zig's testing allocator checks for leaked Zig allocations.
@@ -144,20 +144,59 @@ defer app.destroy();
 try app.run();
 ```
 
+## Architecture
+
+| Module | Responsibility |
+| --- | --- |
+| [`node.zig`](src/node.zig) | Logical nodes, identity, options, Builder and owned declaration snapshots |
+| [`view.zig`](src/view.zig) | One model's `content()`, reactive subscriptions and prepare/commit lifecycle |
+| [`dom.zig`](src/dom.zig) | Retained LVGL objects, virtual-node flattening, reconciliation and native events |
+| [`state.zig`](src/state.zig) | State, bindings, signals and observers |
+| [`app.zig`](src/app.zig) | SDL/LVGL host, event loop and DOM ownership |
+
+`root.zig` exposes these modules as `zui.node`, `zui.view`, `zui.dom` and
+`zui.state`, as well as the usual top-level types. `core.zig` exposes the parts
+that work without LVGL. Each View finishes its content and checks deferred
+errors before DOM preparation. All affected Views commit together only after
+preparation succeeds; a failed child leaves every previous snapshot and
+subscription intact. DOM traversal currently visits the retained tree even
+when only one View is dirty.
+
+```zig
+pub fn content(self: *Window, ui: *zui.Builder) void {
+    var page = ui.vbox(.{ .visible = self.show_counter.get(ui) });
+    page.view(&self.counter, .{ .key = "counter" });
+}
+```
+
+All widgets and physical containers use `Options.visible` (default `true`).
+`.visible = false` hides a retained control and excludes it from layout;
+showing it again preserves its identity and unchanged editor caret. An `if`
+around the declaration instead removes and later remounts it. Virtual Views
+have no native visibility flag: put visibility on their physical container,
+as above. Hidden Views currently keep processing reactive updates; CPPUI's
+additional hidden-subtree freezing behavior is not implemented yet.
+See the [Views recipe](cookbook/views.zig) for independent counters and retained pages.
+
 ## Update and ownership rules
 
 - All UI and reactive operations run on one UI thread. State reads during `content()`
   register dependencies; subscriptions are replaced only after a successful
   render. Equal State values and equal TextState contents do not notify.
-- State changes mark the root dirty. `pump()` flushes after native event
-  dispatch, coalescing several writes. Call `flush()` explicitly in tests or
-  `invalidate()` after changing non-reactive model fields. Building a view
-  cannot mutate State; callbacks cannot recursively flush.
-- This version has one reactive root per App. Reusable components are ordinary
-  functions accepting builders. Independently scheduled retained subviews,
-  cross-thread posting and computed-state APIs are not implemented yet.
+- State changes dirty only the Views that read them. `pump()` flushes after native
+  event dispatch, coalescing several writes. Only dirty Views execute `content()`;
+  a parent update does not rerun a clean child View. Call `flush()` explicitly in
+  tests, `app.invalidate()` for non-reactive root fields, or
+  `app.findView(key).?.invalidate()` for non-reactive child fields. Building a
+  View cannot mutate State; callbacks cannot recursively flush.
+- `ui.view(&child_model, .{ .key = "child" })` declares a retained virtual subtree
+  with its own subscriptions and snapshot. It can emit zero or more children
+  without adding an LVGL wrapper. Ordinary functions accepting builders still
+  share their caller's View. Cross-thread posting, computed state and explicit
+  freeze/thaw hooks are not implemented yet.
 - Keys are unique among siblings. Identity is **kind + key**; unkeyed children
-  use **kind + position**. Layout and text changes do not change identity.
+  use **kind + position**. Views also match model type and address; changing the
+  model replaces the View. Layout and text changes do not change identity.
   Matching currently uses a linear search per child, so very large reordered
   lists may require a future indexing optimization.
 - Models, State, Binding contexts and callback contexts are borrowed. They must
@@ -169,10 +208,10 @@ try app.run();
 - Build or Zig allocation failure keeps the previous tree and subscriptions.
   New native controls are staged hidden until preparation succeeds. LVGL's
   internal allocation/assertion failures are not a fully recoverable transaction.
-- A binding setter error is returned by the next `flush()`/`pump()`. The root
-  remains dirty so a subsequent successful flush restores the model's value.
+- A binding setter error is returned by the next `flush()`/`pump()`. The
+  owning View remains dirty so a subsequent successful flush restores the model's value.
   Custom bindings must provide a `Signal` for automatic external notifications,
-  or arrange for `app.invalidate()` themselves.
+  or explicitly invalidate their owning View.
 - `app.find(key)` returns the first depth-first matching native pointer. It is
   borrowed and becomes invalid when removed. Deletion of a whole managed
   control/subtree is observed and remounted on the next flush. Do not delete or
@@ -190,12 +229,14 @@ colors and `small_text` can be set on a control or inherited from a container.
 
 ## Source layout
 
-- `src/core.zig`: declarations, identity, state, bindings and dependencies.
-- `src/root.zig`: retained LVGL tree, reconciliation, event dispatch and App.
+- `src/core.zig`: public facade for the LVGL-independent node, view and state modules.
+- `src/root.zig`: public facade adding the LVGL DOM and App modules.
 - `native/`: LVGL configuration and the small C SDL host adapter.
 - `examples/main.zig`: counter, form and keyed editor list.
 - `cookbook/`: gallery, recipe registry, separate recipe sources and smoke tests.
+- `src/core_tests.zig`: declarations, deferred errors and reactive-state checks.
 - `src/integration_tests.zig`: native widget and lifetime regressions.
+- `src/view_tests.zig`: independent View updates, virtual-node layout, rollback and visibility.
 
 The UI/state logic is Zig. The C adapter handles SDL host setup, orderly quit
 and screenshot output; LVGL supplies layout, rendering and native controls.

@@ -55,6 +55,9 @@ pub const App = struct {
     pub fn run(self: *App) !void {
         while (try self.pump()) c.zui_host_delay(8);
     }
+    pub fn findView(self: *App, key: []const u8) ?*@import("core").View {
+        return self.dom.findView(key);
+    }
     pub fn find(self: *App, key: []const u8) ?*c.lv_obj_t {
         return self.dom.find(key);
     }
