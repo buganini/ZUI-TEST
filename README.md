@@ -1,6 +1,6 @@
 # ZUI
 
-A Zig declarative UI framework inspired by CPPUI, targeting LVGL.
+A Zig declarative UI framework developed after PUI/CPPUI, targeting LVGL.
 
 Requires Zig 0.17.1. The core provides a declaration builder, keyed identity,
 reactive State/Binding, owned TextState and transactional dependency replacement.
