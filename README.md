@@ -96,10 +96,12 @@ in a real desktop session.
 
 ## API
 
-An application model supplies `pub fn build(self, ui: *zui.Builder) !void`:
+An application model supplies `pub fn content(self, ui: *zui.Builder) !void`.
+Cookbook recipes also use `content()` as their UI declaration entry point,
+following PUI / CPPUI:
 
 ```zig
-pub fn build(self: *Counter, ui: *zui.Builder) !void {
+pub fn content(self: *Counter, ui: *zui.Builder) !void {
     var column = try ui.vbox(.{ .padding = 12, .gap = 8 });
     try column.labelFmt("Count: {d}", .{try self.count.get(ui)}, .{});
     try column.button("+", .{
@@ -126,7 +128,7 @@ try app.run();
 
 ## Update and ownership rules
 
-- All UI and reactive operations run on one UI thread. State reads during build
+- All UI and reactive operations run on one UI thread. State reads during `content()`
   register dependencies; subscriptions are replaced only after a successful
   render. Equal State values and equal TextState contents do not notify.
 - State changes mark the root dirty. `pump()` flushes after native event
@@ -144,7 +146,7 @@ try app.run();
   remain at stable addresses and outlive every mounted control using them.
   `State(T)` copies values shallowly; `TextState` owns and copies its bytes.
 - Declaration keys and text are copied into a render arena. Builders are valid
-  only during that build. Mounted nodes are separately allocated and retain
+  only during that `content()` call. Mounted nodes are separately allocated and retain
   their native identity across renders.
 - Build or Zig allocation failure keeps the previous tree and subscriptions.
   New native controls are staged hidden until preparation succeeds. LVGL's

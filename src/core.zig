@@ -236,7 +236,7 @@ pub const Snapshot = struct {
     }
 };
 
-/// A builder is a handle into one render's arena; never keep it after build().
+/// A builder is a handle into one render's arena; never keep it after content().
 pub const Builder = struct {
     snapshot: *Snapshot,
     parent: *Declaration,

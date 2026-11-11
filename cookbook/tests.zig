@@ -35,8 +35,8 @@ test "sidebar visits every recipe and runtime source matches the active page" {
         const filename = try a.print("{s}.zig", .{page.key});
         defer a.free(filename);
         try std.testing.expectEqualStrings(filename, text(app, "source-file"));
-        if (page.render != null) {
-            try std.testing.expect(std.mem.indexOf(u8, text(app, "source-code"), "pub fn render") != null);
+        if (page.content != null) {
+            try std.testing.expect(std.mem.indexOf(u8, text(app, "source-code"), "pub fn content") != null);
         } else try std.testing.expect(std.mem.indexOf(u8, text(app, "source-code"), "Unable to read source file:") != null);
     }
     // Both panes remain beside the sidebar at a smaller desktop size.

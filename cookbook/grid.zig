@@ -1,7 +1,7 @@
 const zui = @import("zui");
 const Model = @import("model.zig").Model;
 
-pub fn render(model: *Model, ui: *zui.Builder) !void {
+pub fn content(model: *Model, ui: *zui.Builder) !void {
     try ui.button("Change column count", .{ .key = "grid-columns", .on_click = zui.callback(model, columns) });
     try ui.checkbox("Reverse tiles", model.grid_reverse.binding(), .{ .key = "grid-reverse" });
     const count = try model.grid_columns.get(ui);

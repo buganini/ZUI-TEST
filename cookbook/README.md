@@ -58,7 +58,8 @@ page preserves keyed control identity and editor caret position.
 
 - `gallery.zig`: navigation, source reload and Code / Result layout.
 - `recipes.zig`: recipe registration and capability status.
-- `<key>.zig`: UI declarations and callbacks for one recipe.
+- `<key>.zig`: a `pub fn content(model, ui) !void` entry point and callbacks for
+  one recipe. Application models and the gallery also declare UI in `content()`.
 - `model.zig`: model lifetime and external binding storage.
 - `source.zig`: runtime source loader using `std.Io`.
 - `tests.zig`: native events and assertions, kept out of interactive recipes.

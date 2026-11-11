@@ -37,7 +37,7 @@ pub const Demo = struct {
         self.show.deinit();
         self.count.deinit();
     }
-    pub fn build(self: *Demo, ui: *zui.Builder) !void {
+    pub fn content(self: *Demo, ui: *zui.Builder) !void {
         var page = try ui.vbox(.{ .key = "page", .padding = 20, .gap = 16 });
         try page.label("ZUI / Zig + LVGL", .{});
         var counter = try page.hbox(.{});

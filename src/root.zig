@@ -43,7 +43,7 @@ pub const App = struct {
     allocator: Allocator,
     host: *c.zui_host,
     context: *anyopaque,
-    build_fn: *const fn (*anyopaque, *Builder) anyerror!void,
+    content_fn: *const fn (*anyopaque, *Builder) anyerror!void,
     observer: core.Observer,
     snapshot: ?*core.Snapshot = null,
     root: ?*Mounted = null,
@@ -63,12 +63,12 @@ pub const App = struct {
             .host = host,
             .context = model,
             .observer = core.Observer.init(allocator),
-            .build_fn = struct {
-                fn build(raw: *anyopaque, ui: *Builder) !void {
+            .content_fn = struct {
+                fn content(raw: *anyopaque, ui: *Builder) !void {
                     const context: T = @ptrCast(@alignCast(raw));
-                    try context.build(ui);
+                    try context.content(ui);
                 }
-            }.build,
+            }.content,
         };
         return self;
     }
@@ -107,7 +107,7 @@ pub const App = struct {
             core.build_depth += 1;
             defer core.build_depth -= 1;
             var ui = next.builder();
-            try self.build_fn(self.context, &ui);
+            try self.content_fn(self.context, &ui);
         }
         try self.observer.prepare(next.dependencies.items);
         // New native objects are hidden until the whole plan is ready. Every

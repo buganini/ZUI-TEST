@@ -1,7 +1,7 @@
 const zui = @import("zui");
 const Model = @import("model.zig").Model;
 
-pub fn render(model: *Model, ui: *zui.Builder) !void {
+pub fn content(model: *Model, ui: *zui.Builder) !void {
     var row = try ui.hbox(.{});
     try row.button("Clear", .{ .key = "field-clear", .on_click = zui.callback(model, clear) });
     try row.button("Set text", .{ .key = "field-set", .on_click = zui.callback(model, set) });

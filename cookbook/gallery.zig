@@ -55,7 +55,7 @@ pub const Gallery = struct {
         try self.load(self.selected.peek());
     }
 
-    pub fn build(self: *Gallery, ui: *zui.Builder) !void {
+    pub fn content(self: *Gallery, ui: *zui.Builder) !void {
         const selected = try self.selected.get(ui);
         const page = recipes[selected];
         var gallery = try ui.hbox(.{ .key = "gallery", .height_percent = 100, .padding = 16, .gap = 16 });
@@ -93,8 +93,8 @@ pub const Gallery = struct {
         try result.label("Result", .{ .height = 38 });
         try result.labelFmt("{s}  /  {s}", .{ page.title, page.status() }, .{ .small_text = true, .width_percent = 100 });
         var body = try result.scroll(.{ .key = page.key, .height = 0, .grow = 1, .gap = 12 });
-        if (page.render) |render| {
-            try render(&self.model, &body);
+        if (page.content) |declare| {
+            try declare(&self.model, &body);
             if (page.remaining.len > 0)
                 try body.labelFmt("Still to port: {s}", .{page.remaining}, .{ .small_text = true, .text_color = 0x526475, .width_percent = 100 });
         } else {

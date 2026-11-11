@@ -1,7 +1,7 @@
 const zui = @import("zui");
 const Model = @import("model.zig").Model;
 
-pub fn render(model: *Model, ui: *zui.Builder) !void {
+pub fn content(model: *Model, ui: *zui.Builder) !void {
     try ui.label("Drag a divider, or focus it with Tab and use arrow keys.", .{ .width_percent = 100 });
     var vertical = try ui.splitter(model.split_vertical.binding(), .{ .key = "example-splitter", .vertical = true, .height = 440 });
     var horizontal = try vertical.splitter(model.split_horizontal.binding(), .{ .key = "splitter-horizontal" });

@@ -1,7 +1,7 @@
 const zui = @import("zui");
 const Model = @import("model.zig").Model;
 
-pub fn render(model: *Model, ui: *zui.Builder) !void {
+pub fn content(model: *Model, ui: *zui.Builder) !void {
     try ui.labelFmt("Selected: {c}", .{try model.button_value.get(ui)}, .{ .key = "button-value" });
     var row = try ui.hbox(.{});
     try row.button("A", .{ .key = "button-a", .on_click = zui.callback(model, selectA) });

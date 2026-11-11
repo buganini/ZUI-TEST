@@ -1,7 +1,7 @@
 const zui = @import("zui");
 const Model = @import("model.zig").Model;
 
-pub fn render(model: *Model, ui: *zui.Builder) !void {
+pub fn content(model: *Model, ui: *zui.Builder) !void {
     try ui.checkbox("Reverse order", model.inverse_v.binding(), .{ .key = "vbox-inverse" });
     const reverse = try model.inverse_v.get(ui);
     try ui.label("Default gap: 8 pixels", .{});

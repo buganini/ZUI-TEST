@@ -1,7 +1,7 @@
 const zui = @import("zui");
 const Model = @import("model.zig").Model;
 
-pub fn render(model: *Model, ui: *zui.Builder) !void {
+pub fn content(model: *Model, ui: *zui.Builder) !void {
     try ui.checkbox("Show greeting", model.greeting_visible.binding(), .{ .key = "greeting-toggle" });
     if (try model.greeting_visible.get(ui))
         try ui.label("Hello World", .{ .key = "greeting" });

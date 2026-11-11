@@ -2,7 +2,7 @@ const std = @import("std");
 const zui = @import("zui");
 const Model = @import("model.zig").Model;
 
-pub fn render(model: *Model, ui: *zui.Builder) !void {
+pub fn content(model: *Model, ui: *zui.Builder) !void {
     const count = try model.scroll_rows.get(ui);
     var row = try ui.hbox(.{});
     try row.button("-", .{ .key = "scroll-remove", .disabled = count == 0, .on_click = zui.callback(model, remove) });

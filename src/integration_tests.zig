@@ -34,7 +34,7 @@ const Model = struct {
         self.alternate.deinit();
         self.count.deinit();
     }
-    pub fn build(self: *Model, ui: *zui.Builder) !void {
+    pub fn content(self: *Model, ui: *zui.Builder) !void {
         var box = try ui.vbox(.{ .key = "main", .padding = 12 });
         const value = if (self.use_alternate) try self.alternate.get(ui) else try self.count.get(ui);
         try box.labelFmt("Count: {d}", .{value}, .{ .key = "count" });
@@ -226,7 +226,7 @@ test "splitter resizes retained panes, clamps keyboard input and rejects missing
         ratio: zui.State(u8),
         vertical: bool = false,
         missing: bool = false,
-        pub fn build(self: *@This(), ui: *zui.Builder) !void {
+        pub fn content(self: *@This(), ui: *zui.Builder) !void {
             var panes = try ui.splitter(self.ratio.binding(), .{
                 .key = "panes",
                 .height_percent = 100,

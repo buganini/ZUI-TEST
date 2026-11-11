@@ -1,7 +1,7 @@
 const zui = @import("zui");
 const Model = @import("model.zig").Model;
 
-pub fn render(model: *Model, ui: *zui.Builder) !void {
+pub fn content(model: *Model, ui: *zui.Builder) !void {
     try ui.label("Custom getter / setter", .{});
     const binding = model.external.binding();
     try ui.labelFmt("Value: {s}", .{try binding.get(ui)}, .{ .key = "binding-value", .width_percent = 100 });
