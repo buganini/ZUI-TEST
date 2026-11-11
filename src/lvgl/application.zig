@@ -1,6 +1,6 @@
 const std = @import("std");
 const c = @import("c");
-const Dom = @import("../root.zig").Dom;
+const core = @import("core");
 
 pub const ApplicationOptions = struct {
     title: [:0]const u8 = "ZUI",
@@ -8,11 +8,12 @@ pub const ApplicationOptions = struct {
     height: i32 = 600,
 };
 
-/// Owns one SDL2/LVGL host, its DOM and the root View. Models are borrowed.
+/// Owns one SDL2/LVGL host and the root View, like CPPUI's LVGL Application.
+/// Models are borrowed.
 pub const Application = struct {
     allocator: std.mem.Allocator,
     host: *c.zui_host,
-    dom: Dom,
+    root: core.Root,
     render_count: usize = 0,
 
     pub fn create(allocator: std.mem.Allocator, model: anytype, options: ApplicationOptions) !*Application {
@@ -20,24 +21,26 @@ pub const Application = struct {
         const self = try allocator.create(Application);
         errdefer allocator.destroy(self);
         const host = c.zui_host_create(options.title, options.width, options.height) orelse return error.HostUnavailable;
-        self.* = .{ .allocator = allocator, .host = host, .dom = Dom.init(allocator, model) };
+        errdefer c.zui_host_destroy(host);
+        self.* = .{ .allocator = allocator, .host = host, .root = undefined };
+        try self.root.init(allocator, model);
         return self;
     }
     /// Call after run()/pump() returns, never from content or a native callback.
     pub fn destroy(self: *Application) void {
-        self.dom.deinit();
+        self.root.deinit();
         c.zui_host_destroy(self.host);
         self.allocator.destroy(self);
     }
     pub fn invalidate(self: *Application) void {
-        self.dom.invalidate();
+        self.root.invalidate();
     }
     pub fn requestQuit(self: *Application) void {
         c.zui_host_request_close(self.host);
     }
     pub fn flush(self: *Application) !void {
-        try self.dom.flush();
-        self.render_count = self.dom.render_count;
+        defer self.render_count = self.root.render_count;
+        try self.root.flush();
     }
     pub fn pump(self: *Application) !bool {
         if (c.zui_host_closing(self.host)) return false;
@@ -55,10 +58,10 @@ pub const Application = struct {
     pub fn run(self: *Application) !void {
         while (try self.pump()) c.zui_host_delay(8);
     }
-    pub fn findView(self: *Application, id: []const u8) ?*@import("core").View {
-        return self.dom.findView(id);
+    pub fn findView(self: *Application, id: []const u8) ?*core.View {
+        return self.root.findView(id);
     }
     pub fn find(self: *Application, id: []const u8) ?*c.lv_obj_t {
-        return self.dom.find(id);
+        return self.root.find(id);
     }
 };

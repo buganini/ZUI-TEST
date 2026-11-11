@@ -3,6 +3,8 @@ const Allocator = std.mem.Allocator;
 const state = @import("state.zig");
 const Signal = state.Signal;
 const Binding = state.Binding;
+const View = @import("view.zig").View;
+const Content = @import("view.zig").Content;
 
 pub const Callback = struct {
     context: *anyopaque,
@@ -104,129 +106,253 @@ pub const Options = struct {
     on_click: ?Callback = null,
 };
 
+/// Like CPPUI's Node: one declaration per render. A matched declaration takes
+/// over its predecessor's native state in update(prev); the predecessor is then
+/// retired. The flags drive dom.sync(), and per-kind behavior lives in the
+/// backend selected at build time (see src/lvgl/backend.zig).
 pub const Node = struct {
-    parent: ?*Node = null,
+    allocator: Allocator,
     kind: Kind,
-    options: Options,
-    text: [:0]const u8,
-    content: ?@import("view.zig").Content = null,
+    /// The View whose content() declared this node (CPPUI's cppui_root).
+    owner: ?*View = null,
+    parent: ?*Node = null,
+    dom_parent: ?*Node = null,
+    children: List = .empty,
+
+    is_terminal: bool = false,
+    is_outoforder: bool = false,
+    is_reversed_order: bool = false,
+    is_view: bool = false,
+    is_virtual: bool = false,
+    is_movable: bool = true,
+    is_grid_layout: bool = false,
+    destroyed: bool = false,
+
+    options: Options = .{},
+    text: [:0]const u8 = "",
     checked: bool = false,
     bool_binding: ?Binding(bool) = null,
     text_binding: ?Binding([]const u8) = null,
     split_binding: ?Binding(u8) = null,
     split_ratio: u8 = 50,
-    children: std.ArrayListUnmanaged(*Node) = std.ArrayListUnmanaged(*Node).empty,
+
+    /// Retained native state, moved from the previous declaration on update.
+    ui: Backend.Widget = .{},
+
+    pub const List = std.ArrayListUnmanaged(*Node);
+    /// The backend chosen at build time, like cppui/backend.hpp.
+    pub const Backend = @import("backend");
+
+    pub fn init(allocator: Allocator, kind: Kind) Node {
+        var node = Node{ .allocator = allocator, .kind = kind };
+        switch (kind) {
+            .label, .button, .checkbox, .text_field => node.is_terminal = true,
+            .spacer, .divider => {
+                node.is_terminal = true;
+                node.is_movable = false;
+            },
+            .grid => node.is_grid_layout = true,
+            .view => {
+                node.is_view = true;
+                node.is_virtual = true;
+            },
+            .root, .column, .row, .scroll, .splitter => {},
+        }
+        return node;
+    }
+
+    /// CPPUI's operator==: same type, same grid identity, and the same id when
+    /// either has one. Unkeyed siblings of one type match in sequence.
+    pub fn eql(self: *const Node, other: *const Node) bool {
+        if (self.kind != other.kind) return false;
+        if (self.kind == .view) {
+            // A View is its model here: a different model is a different View.
+            const a = View.fromConst(self).content;
+            const b = View.fromConst(other).content;
+            if (a.context != b.context or !std.mem.eql(u8, a.type_name, b.type_name)) return false;
+        }
+        const cell = gridIdentity(self);
+        const other_cell = gridIdentity(other);
+        if ((cell == null) != (other_cell == null)) return false;
+        if (cell) |value| if (!std.meta.eql(value, other_cell.?)) return false;
+        if (self.options.id != null or other.options.id != null) {
+            const a = self.options.id orelse return false;
+            const b = other.options.id orelse return false;
+            return std.mem.eql(u8, a, b);
+        }
+        return true;
+    }
+    fn gridIdentity(node: *const Node) ?GridCell {
+        const cell = node.options.grid;
+        return if (cell.row != null and cell.column != null) cell else null;
+    }
+
+    /// Native insertion point for children: this node's native, or the nearest
+    /// physical ancestor's. Null means the backend's top level.
+    pub fn inner(self: *Node) ?Backend.Native {
+        if (Backend.native(self)) |native| return native;
+        return if (self.parent) |parent| parent.inner() else null;
+    }
+    /// This node's native, or a virtual node's first physical descendant.
+    pub fn outer(self: *Node) ?Backend.Native {
+        if (Backend.native(self)) |native| return native;
+        if (self.children.items.len > 0) return self.children.items[0].outer();
+        return null;
+    }
+
+    pub fn update(self: *Node, prev: ?*Node) !void {
+        if (self.is_view) return View.from(self).update();
+        try Backend.update(self, prev);
+    }
+    pub fn postUpdate(self: *Node) void {
+        if (!self.is_virtual) Backend.postUpdate(self);
+    }
+    pub fn postSync(self: *Node) !void {
+        if (!self.is_virtual) try Backend.postSync(self);
+    }
+    pub fn addChild(self: *Node, index: usize, child: *Node) void {
+        if (!self.is_virtual) Backend.addChild(self, index, child);
+    }
+    pub fn removeChild(self: *Node, index: usize, child: *Node) void {
+        if (!self.is_virtual) Backend.removeChild(self, index, child);
+    }
+    /// Release native state. `direct` deletes the native object itself;
+    /// otherwise a deleted native ancestor owns it.
+    pub fn destroy(self: *Node, direct: bool) void {
+        if (!self.is_virtual) Backend.destroy(self, direct);
+    }
+    /// Free the declaration after destroy() or after a successor adopted its
+    /// native state. Children are owned by the caller.
+    pub fn free(self: *Node) void {
+        const allocator = self.allocator;
+        Backend.release(self);
+        self.children.deinit(allocator);
+        if (self.text.len > 0) allocator.free(self.text);
+        if (self.options.id) |value| allocator.free(value);
+        if (self.options.placeholder) |value| allocator.free(value);
+        if (self.is_view) {
+            const view = View.from(self);
+            view.observer.deinit();
+            allocator.destroy(view);
+        } else allocator.destroy(self);
+    }
+
+    /// CPPUI's findDomOffsetForNode without the offset cache: the number of
+    /// native children before `target` under this physical node.
+    pub fn findDomOffset(self: *Node, target: *Node, offset: *usize) bool {
+        if (self == target) {
+            offset.* = 0;
+            return true;
+        }
+        var current: usize = 0;
+        for (self.children.items) |child| {
+            if (child == target) {
+                offset.* = current;
+                return true;
+            }
+            if (child.is_virtual) {
+                var nested: usize = 0;
+                const found = child.findDomOffset(target, &nested);
+                current += nested;
+                if (found) {
+                    offset.* = current;
+                    return true;
+                }
+            } else if (!child.is_outoforder) current += 1;
+        }
+        offset.* = current;
+        return false;
+    }
 };
 
-/// Each render owns its declarations, copied ids, copied text and dependencies.
-/// Kept alive until the next successful commit; failed builds discard it whole.
-pub const Snapshot = struct {
+/// Per-render declaration context: the View being built, its first error and
+/// the Signals read so far.
+pub const Build = struct {
     allocator: Allocator,
-    arena: std.heap.ArenaAllocator,
-    root: Node,
-    dependencies: std.ArrayListUnmanaged(*Signal) = std.ArrayListUnmanaged(*Signal).empty,
+    view: *View,
     failure: ?anyerror = null,
+    dependencies: std.ArrayListUnmanaged(*Signal) = .empty,
 
-    pub fn create(allocator: Allocator) !*Snapshot {
-        const self = try allocator.create(Snapshot);
-        self.* = .{
-            .allocator = allocator,
-            .arena = std.heap.ArenaAllocator.init(allocator),
-            .root = .{ .kind = .root, .options = .{}, .text = "" },
-        };
-        return self;
-    }
-    pub fn destroy(self: *Snapshot) void {
-        const allocator = self.allocator;
-        self.arena.deinit();
-        allocator.destroy(self);
-    }
-    pub fn builder(self: *Snapshot) Builder {
-        return .{ .snapshot = self, .parent = &self.root };
-    }
-    fn fail(self: *Snapshot, err: anyerror) void {
+    pub fn fail(self: *Build, err: anyerror) void {
         if (self.failure == null) self.failure = err;
     }
-    /// Called once content() returns, before preparing subscriptions or widgets.
-    /// A failed snapshot remains failed; the next render uses a fresh snapshot.
-    pub fn finish(self: *Snapshot) !void {
-        if (self.failure) |err| return err;
-        validate(&self.root) catch |err| {
-            self.fail(err);
-            return err;
-        };
-    }
-    fn validate(node: *const Node) error{InvalidPaneCount}!void {
-        if (node.kind == .splitter and node.children.items.len != 2) return error.InvalidPaneCount;
-        for (node.children.items) |child| try validate(child);
-    }
 };
 
-/// A declaration handle into one content snapshot. Copies refer to the same
-/// node; never retain a handle after content(). Factories and modifiers take
-/// handles by value so temporary results can be chained without try.
+/// A declaration handle, like the scope objects CPPUI's constructors push.
+/// Copies refer to the same node; never retain a handle after content().
+/// Factories and modifiers take handles by value so temporary results can be
+/// chained without try. After a failure every handle is inert.
 pub const Builder = struct {
-    snapshot: *Snapshot,
+    build: *Build,
     // Current node: a container's insertion point or a widget being configured.
     // Null is an inert handle returned after a declaration failure.
     parent: ?*Node,
 
     fn active(self: Builder) bool {
-        return self.parent != null and self.snapshot.failure == null;
+        return self.parent != null and self.build.failure == null;
     }
     fn inert(self: Builder) Builder {
-        return .{ .snapshot = self.snapshot, .parent = null };
+        return .{ .build = self.build, .parent = null };
     }
     fn reject(self: Builder, err: anyerror) Builder {
         self.fail(err);
         return self.inert();
     }
-    /// Report a custom declaration error without committing a partial tree.
+    /// Report a custom declaration error; the View keeps its mounted tree.
     pub fn fail(self: Builder, err: anyerror) void {
-        self.snapshot.fail(err);
+        self.build.fail(err);
     }
     pub fn track(self: Builder, signal: *Signal) void {
         if (!self.active()) return;
-        if (std.mem.indexOfScalar(*Signal, self.snapshot.dependencies.items, signal) == null)
-            self.snapshot.dependencies.append(self.snapshot.arena.allocator(), signal) catch |err| self.fail(err);
+        const deps = &self.build.dependencies;
+        if (std.mem.indexOfScalar(*Signal, deps.items, signal) == null)
+            deps.append(self.build.allocator, signal) catch |err| self.fail(err);
+    }
+    fn isRoot(self: Builder, node: *const Node) bool {
+        return node == &self.build.view.node;
     }
     fn add(self: Builder, kind: Kind, text: []const u8) Builder {
         if (!self.active()) return self.inert();
         const node = self.addFallible(kind, text) catch |err| return self.reject(err);
-        return .{ .snapshot = self.snapshot, .parent = node };
+        return .{ .build = self.build, .parent = node };
     }
     fn copyText(self: Builder, text: []const u8) ![:0]const u8 {
         if (std.mem.indexOfScalar(u8, text, 0) != null) return error.EmbeddedNul;
-        const copy = try self.snapshot.arena.allocator().allocSentinel(u8, text.len, 0);
+        if (text.len == 0) return "";
+        const copy = try self.build.allocator.allocSentinel(u8, text.len, 0);
         @memcpy(copy, text);
         return copy;
     }
     fn addFallible(self: Builder, kind: Kind, text: []const u8) !*Node {
-        switch (self.parent.?.kind) {
-            .root, .column, .row, .grid, .scroll, .splitter => {},
-            else => return error.InvalidParent,
-        }
-        const copied_text = try self.copyText(text);
-        const allocator = self.snapshot.arena.allocator();
-        const node = try allocator.create(Node);
-        node.* = .{ .parent = self.parent, .kind = kind, .options = .{}, .text = copied_text };
-        try self.parent.?.children.append(allocator, node);
+        const parent = self.parent.?;
+        if (parent.is_terminal) return error.InvalidParent;
+        const allocator = self.build.allocator;
+        try parent.children.ensureUnusedCapacity(allocator, 1);
+        const copied = try self.copyText(text);
+        errdefer if (copied.len > 0) allocator.free(copied);
+        const node = if (kind == .view) &(try allocator.create(View)).node else try allocator.create(Node);
+        node.* = Node.init(allocator, kind);
+        node.parent = parent;
+        node.owner = self.build.view;
+        node.text = copied;
+        parent.children.appendAssumeCapacity(node);
         return node;
     }
 
-    /// Copy the id into the snapshot; identity remains unique among siblings.
+    /// Copy the id; identity remains unique among siblings.
     pub fn id(self: Builder, value: []const u8) Builder {
         if (!self.active()) return self.inert();
         if (value.len == 0) return self.reject(error.EmptyId);
         const node = self.parent.?;
-        const parent = node.parent orelse return self.reject(error.InvalidRootModifier);
-        for (parent.children.items) |sibling| {
+        if (self.isRoot(node)) return self.reject(error.InvalidRootModifier);
+        for (node.parent.?.children.items) |sibling| {
             if (sibling == node) continue;
             if (sibling.options.id) |other| {
                 if (std.mem.eql(u8, value, other)) return self.reject(error.DuplicateId);
             }
         }
-        const copy = self.snapshot.arena.allocator().dupe(u8, value) catch |err| return self.reject(err);
+        const copy = self.build.allocator.dupe(u8, value) catch |err| return self.reject(err);
+        if (node.options.id) |old| self.build.allocator.free(old);
         node.options.id = copy;
         return self;
     }
@@ -235,11 +361,11 @@ pub const Builder = struct {
     fn physical(self: Builder) ?*Node {
         if (!self.active()) return null;
         const node = self.parent.?;
-        if (node.kind == .root) {
+        if (self.isRoot(node)) {
             self.fail(error.InvalidRootModifier);
             return null;
         }
-        if (node.kind == .view) {
+        if (node.is_view) {
             self.fail(error.InvalidViewModifier);
             return null;
         }
@@ -306,7 +432,7 @@ pub const Builder = struct {
         return self;
     }
     /// A Grid child's cell, like PUI's `.grid()`. Automatic Grids use only spans.
-    /// Declared coordinates join identity, as in PUI.
+    /// Declared coordinates join identity, as in PUI and CPPUI.
     pub fn gridCell(self: Builder, cell: GridCell) Builder {
         const node = self.physical() orelse return self.inert();
         if (cell.rowspan == 0 or cell.columnspan == 0) return self.reject(error.InvalidLayout);
@@ -328,7 +454,9 @@ pub const Builder = struct {
     pub fn placeholder(self: Builder, text: []const u8) Builder {
         const node = self.physical() orelse return self.inert();
         if (node.kind != .text_field) return self.reject(error.InvalidModifier);
-        node.options.placeholder = self.copyText(text) catch |err| return self.reject(err);
+        const copy = self.copyText(text) catch |err| return self.reject(err);
+        if (node.options.placeholder) |old| self.build.allocator.free(old);
+        node.options.placeholder = if (copy.len > 0) copy else null;
         return self;
     }
     /// Buttons and labels accept click callbacks.
@@ -344,7 +472,12 @@ pub const Builder = struct {
     /// container. The borrowed model must remain at a stable address until removal.
     pub fn subView(self: Builder, model: anytype) Builder {
         const child = self.add(.view, "");
-        if (child.parent) |node| node.content = @import("view.zig").Content.init(model);
+        if (child.parent) |node| {
+            const view = View.from(node);
+            const declared = node.*;
+            view.* = View.init(declared, Content.init(model));
+            view.root = self.build.view.root;
+        }
         return child;
     }
     fn box(self: Builder, kind: Kind, options: BoxOptions) Builder {
@@ -396,7 +529,9 @@ pub const Builder = struct {
     }
     pub fn labelFmt(self: Builder, comptime fmt: []const u8, args: anytype) Builder {
         if (!self.active()) return self.inert();
-        const text = std.fmt.allocPrint(self.snapshot.arena.allocator(), fmt, args) catch |err| return self.reject(err);
+        const allocator = self.build.allocator;
+        const text = std.fmt.allocPrint(allocator, fmt, args) catch |err| return self.reject(err);
+        defer allocator.free(text);
         return self.label(text);
     }
     pub fn button(self: Builder, text: []const u8) Builder {
@@ -420,20 +555,3 @@ pub const Builder = struct {
         return child;
     }
 };
-
-pub fn sameIdentity(old: *const Node, next: *const Node, old_index: usize, next_index: usize) bool {
-    if (old.kind != next.kind) return false;
-    if (next.kind == .view) {
-        const a = old.content.?;
-        const b = next.content.?;
-        if (a.context != b.context or !std.mem.eql(u8, a.type_name, b.type_name)) return false;
-    }
-    if (!std.meta.eql(gridIdentity(old), gridIdentity(next))) return false;
-    if (next.options.id) |name|
-        return if (old.options.id) |other| std.mem.eql(u8, name, other) else false;
-    return old.options.id == null and old_index == next_index;
-}
-fn gridIdentity(declaration: *const Node) ?GridCell {
-    const cell = declaration.options.grid;
-    return if (cell.row != null and cell.column != null) cell else null;
-}

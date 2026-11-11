@@ -4,13 +4,12 @@ pub const node = core.node;
 pub const view = core.view;
 pub const dom = core.dom;
 pub const state = core.state;
-pub const lvgl = @import("lvgl/backend.zig");
+pub const lvgl = @import("lvgl");
 pub const Node = core.Node;
 pub const View = core.View;
-/// The DOM specialized for the LVGL backend.
-pub const Dom = core.dom.Dom(lvgl.Backend);
-pub const Application = @import("lvgl/application.zig").Application;
-pub const ApplicationOptions = @import("lvgl/application.zig").ApplicationOptions;
+pub const Root = core.Root;
+pub const Application = lvgl.Application;
+pub const ApplicationOptions = lvgl.ApplicationOptions;
 pub const Builder = core.Builder;
 pub const Layout = core.Layout;
 pub const Style = core.Style;

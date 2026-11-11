@@ -275,13 +275,20 @@ fn allocationScenario(allocator: std.mem.Allocator) !void {
     model.length = 3;
     try model.count.set(2);
     app.flush() catch |err| {
+        // As in CPPUI, a failed sync keeps what it mounted; the View stays
+        // dirty with a consistent tree, and the retry completes the update.
+        try app.flush();
         try std.testing.expectEqual(old, app.find("count").?);
-        try std.testing.expectEqualStrings("Count: 1", std.mem.span(c.lv_label_get_text(old)));
+        try std.testing.expectEqualStrings("Count: 2", std.mem.span(c.lv_label_get_text(old)));
+        const items = app.find("items").?;
+        try std.testing.expectEqual(3, c.lv_obj_get_child_count(items));
+        for ([_][]const u8{ "a", "b", "c" }, 0..) |key, index|
+            try std.testing.expectEqual(app.find(key).?, c.lv_obj_get_child(items, @intCast(index)));
         return err;
     };
 }
 
-test "every Zig allocation failure while mounting or reconciling cleans up" {
+test "every Zig allocation failure while mounting or reconciling cleans up and retries" {
     try std.testing.checkAllAllocationFailures(a, allocationScenario, .{});
 }
 

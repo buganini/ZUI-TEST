@@ -117,7 +117,7 @@ fn increment(self: *Counter) !void {
 Every widget, container and SubView declaration returns a `Builder` handle.
 Modifiers return the same handle for chaining; use `_ =` when its result is not
 needed, or keep a `const` handle to add children to a container. Copies refer to
-the same snapshot node, so configuring a copy updates that declaration too.
+the same declaration node, so configuring a copy updates that declaration too.
 Methods use Zig's `lowerCamelCase`; type names remain `TitleCase`.
 
 The API mirrors PUI and CPPUI. Zig has no keyword arguments, so options that
@@ -182,28 +182,27 @@ try app.run();
 
 ## Architecture
 
-The module split follows CPPUI (`node.hpp`, `view.hpp`, `dom.hpp`, `cppui/lvgl/`)
-and PUI (`node.py`, `view.py`, `dom.py`, one package per backend):
+The modules mirror CPPUI (`node_header.hpp`/`node.hpp`, `view.hpp`, `dom.hpp`,
+`cppui/lvgl/*.hpp`) and PUI (`node.py`, `view.py`, `dom.py`, one package per backend):
 
-| Module | Responsibility |
-| --- | --- |
-| [`node.zig`](src/node.zig) | Logical nodes, identity, options, Builder and owned declaration snapshots |
-| [`view.zig`](src/view.zig) | One model's `content()`, reactive subscriptions and prepare/commit lifecycle |
-| [`dom.zig`](src/dom.zig) | Backend-independent reconciliation: identity matching, SubView flattening, staged prepare/commit |
-| [`state.zig`](src/state.zig) | State, bindings, signals and observers |
-| [`lvgl/backend.zig`](src/lvgl/backend.zig) | LVGL widgets: creation, updates, placement and native events |
-| [`lvgl/application.zig`](src/lvgl/application.zig) | SDL/LVGL host, event loop, DOM and root View ownership |
+| Module | CPPUI | Responsibility |
+| --- | --- | --- |
+| [`node.zig`](src/node.zig) | `node_header.hpp`, `node.hpp` | `Node`: one declaration per render with CPPUI's flags (`is_virtual`, `is_terminal`, `is_movable`, …), identity (`eql`), DOM offsets and the hooks `sync()` calls; the `Builder` |
+| [`view.zig`](src/view.zig) | `view.hpp`, `Application` | `View`: `content()`, subscriptions, `update()` and `redraw()`; `Root`: the root View, flush and native-callback guards |
+| [`dom.zig`](src/dom.zig) | `dom.hpp` | `sync()`: keyed reconciliation with CPPUI's steps (match, trim, add, move/yield, trim tail), `recurDelete()` |
+| [`grid.zig`](src/grid.zig) | `grid.hpp` | Backend-independent Grid placement |
+| [`state.zig`](src/state.zig) | `state.hpp` | State, bindings, signals and observers |
+| [`lvgl/`](src/lvgl/backend.zig) | `cppui/lvgl/` | One file per widget (`label.zig`, `layout.zig`, `grid.zig`, `splitter.zig`, …), shared `base.zig` and `application.zig` |
 
-`dom.Dom(Backend)` is generic over a backend type; its doc comment lists the
-functions a backend provides. `zui.Dom` is the LVGL specialization.
+Like `cppui/backend.hpp`, core reaches widgets through a backend chosen at
+build time: the `core` module imports `backend`, which is `src/lvgl/backend.zig`
+for the library and the native-free `src/testing/backend.zig` for `test-core`.
+Each render builds new `Node`s; `sync()` matches them against the mounted ones,
+and a matched node takes over its predecessor's native state in `update(prev)`.
+Only structural changes add, remove or move native children.
 
 `root.zig` exposes these modules as `zui.node`, `zui.view`, `zui.dom`,
-`zui.state` and `zui.lvgl`, as well as the usual top-level types. `core.zig`
-exposes the parts that work without LVGL, including the generic DOM. Each View finishes its content and checks deferred
-errors before DOM preparation. All affected Views commit together only after
-preparation succeeds; a failed child leaves every previous snapshot and
-subscription intact. DOM traversal currently visits the retained tree even
-when only one View is dirty.
+`zui.state` and `zui.lvgl`, as well as the usual top-level types.
 
 ```zig
 pub fn content(self: *Window, ui: *zui.Builder) void {
@@ -233,24 +232,27 @@ See the [Views recipe](cookbook/views.zig) for independent counters and retained
   `app.findView(id).?.invalidate()` for non-reactive child fields. Building a
   View cannot mutate State; callbacks cannot recursively flush.
 - `ui.subView(&child_model).id("child")` declares a retained virtual subtree
-  with its own subscriptions and snapshot. It can emit zero or more children
+  with its own subscriptions. It can emit zero or more children
   without adding an LVGL wrapper. Ordinary functions accepting builders still
   share their caller's View. Cross-thread posting, computed state and explicit
   freeze/thaw hooks are not implemented yet.
-- Ids are unique among siblings. Identity is **kind + id**; children without
-  an id use **kind + position**. SubViews also match model type and address; changing the
-  model replaces the View. Layout and text changes do not change identity.
-  Matching currently uses a linear search per child, so very large reordered
-  lists may require a future indexing optimization.
+- Ids are unique among siblings. Identity follows CPPUI's `operator==`: same
+  kind, same declared grid cell, and the same id when either has one. Siblings
+  without ids match by kind in sequence, so removing an earlier sibling of
+  another kind keeps the later ones. SubViews also match model type and address;
+  changing the model replaces the View. Layout and text changes do not change
+  identity. Spacers and Dividers are not movable: they are recreated rather than moved.
 - Models, State, Binding contexts and callback contexts are borrowed. They must
   remain at stable addresses and outlive every mounted control using them.
   `State(T)` copies values shallowly; `TextState` owns and copies its bytes.
-- Declaration ids and text are copied into a render arena. Builders are valid
-  only during that `content()` call. Mounted nodes are separately allocated and retain
-  their native identity across renders.
-- Build or Zig allocation failure keeps the previous tree and subscriptions.
-  New native controls are staged hidden until preparation succeeds. LVGL's
-  internal allocation/assertion failures are not a fully recoverable transaction.
+- Declarations own copies of their ids and text. Builders are valid only during
+  that `content()` call.
+- A failed build (a declaration error or a failed allocation while declaring)
+  keeps the View's mounted tree and subscriptions. A failure during `sync()`
+  behaves like a CPPUI exception: what was already reconciled stays, the rest
+  of the old tree stays mounted, and the View stays dirty for the next flush.
+  Each dirty View redraws on its own, so an error in one View does not undo
+  another View's redraw from the same flush.
 - A binding setter error is returned by the next `flush()`/`pump()`. The
   owning View remains dirty so a subsequent successful flush restores the model's value.
   Custom bindings must provide a `Signal` for automatic external notifications,
@@ -300,9 +302,10 @@ container. LVGL uses the nearest compiled Montserrat size (12, 14, 16, 20 or 24)
 - `native/`: LVGL configuration and the small C SDL host adapter.
 - `examples/main.zig`: counter, form and id-keyed editor list.
 - `cookbook/`: gallery, recipe registry, separate recipe sources and smoke tests.
-- `src/core_tests.zig`: declarations, deferred errors and reactive-state checks.
+- `src/core_tests.zig`: declarations, deferred errors, reactive state and reconciliation.
 - `src/integration_tests.zig`: native widget and lifetime regressions.
-- `src/view_tests.zig`: independent View updates, virtual-node layout, rollback and visibility.
+- `src/view_tests.zig`: independent View updates, virtual-node layout, failure recovery and visibility.
+- `src/testing/backend.zig`: the native-free backend `test-core` checks `sync()` against.
 
 The UI/state logic is Zig. The C adapter handles SDL host setup, orderly quit
 and screenshot output; LVGL supplies layout, rendering and native controls.

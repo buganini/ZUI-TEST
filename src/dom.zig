@@ -1,278 +1,268 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const node = @import("node.zig");
-const View = @import("view.zig").View;
-const Declaration = node.Node;
-const Snapshot = node.Snapshot;
+const Node = @import("node.zig").Node;
+const List = Node.List;
 
-/// Backend-independent reconciliation of View snapshots into retained native
-/// widgets, like CPPUI's dom.hpp and PUI's dom.py. Widgets live in a backend
-/// (see src/lvgl/backend.zig), which provides:
-///
-/// - `Widget`: retained native state for one physical node.
-/// - `Parent`: a native insertion point. `rootParent()` returns the top one and
-///   `parentOf(*Widget)` a container's.
-/// - `Native` and `native(*Widget)`: the handle returned by `find()`.
-/// - `Layout`: per-update storage for a container, prepared before anything is
-///   committed; `prepareLayout(allocator, declaration, physical_children)`,
-///   which receives the declarations of its physical children in order, and
-///   `freeLayout(allocator, layout)`.
-/// - `create(mounted, parent) !Widget` and `destroy(allocator, mounted)`.
-/// - `update(allocator, *Widget, declaration, ?Layout)`, which takes ownership
-///   of the layout; `place(parent, parent_declaration, child, index)` for each
-///   physical child in order; then `finish(*Widget, declaration)`.
-///
-/// Native callbacks use `busy`, `dispatch_depth`, `report()` and
-/// `nativeDeleted()` to stay outside reconciliation.
-pub fn Dom(comptime Backend: type) type {
-    return struct {
-        const Self = @This();
+// A port of CPPUI's dom.hpp (and PUI's dom.py): keyed reconciliation of a
+// container's new declarations against its mounted ones, in one pass that
+// adds, removes and moves native children at flattened offsets.
+//
+// Zig has no exceptions. When update() or a nested sync fails part way, sync()
+// leaves `new` holding exactly the mounted nodes, in native order, and frees
+// everything else, so the caller's tree stays consistent and the next redraw
+// can retry.
 
-        pub const Mounted = struct {
-            dom: *Self,
-            owner: *View,
-            view: ?*View = null,
-            widget: ?Backend.Widget = null,
-            declaration: *Declaration,
-            children: std.ArrayListUnmanaged(*Mounted) = std.ArrayListUnmanaged(*Mounted).empty,
-        };
+pub const Result = struct {
+    num: isize = 0,
+    delta: isize = 0,
+};
 
-        const Plan = struct {
-            mounted: *Mounted,
-            declaration: *Declaration,
-            is_new: bool,
-            children: []*Plan = &.{},
-            prepared: usize = 0,
-            layout: ?Backend.Layout = null,
-            next_snapshot: ?*Snapshot = null,
-        };
+fn indexOfSince(nodes: []const *Node, since: usize, node: *const Node) ?usize {
+    var i = since;
+    while (i < nodes.len) : (i += 1) {
+        if (nodes[i].eql(node)) return i;
+    }
+    return null;
+}
 
-        allocator: Allocator,
-        view: View,
-        root: ?*Mounted = null,
-        busy: bool = false,
-        dispatch_depth: usize = 0,
-        event_error: ?anyerror = null,
-        render_count: usize = 0,
+/// Destroy a subtree. Virtual nodes have no native owner to delete their
+/// descendants, so direct ownership passes through them to physical nodes.
+pub fn recurDelete(child: *Node, direct: bool) void {
+    child.destroyed = true;
+    for (child.children.items) |sub| recurDelete(sub, direct and child.is_virtual);
+    child.children.clearRetainingCapacity();
+    child.destroy(direct);
+    child.free();
+}
 
-        pub fn init(allocator: Allocator, model: anytype) Self {
-            return .{ .allocator = allocator, .view = View.init(allocator, @import("view.zig").Content.init(model)) };
-        }
-        pub fn deinit(self: *Self) void {
-            std.debug.assert(!self.busy and self.dispatch_depth == 0);
-            self.busy = true;
-            if (self.root) |root| self.destroyMounted(root);
-            self.view.deinit();
-        }
-        pub fn invalidate(self: *Self) void {
-            self.view.invalidate();
-        }
-        /// Record a callback or binding error for the next flush() and keep the
-        /// owning View dirty so it restores the model's value.
-        pub fn report(self: *Self, mounted: *Mounted, err: anyerror) void {
-            self.event_error = err;
-            mounted.owner.invalidate();
-        }
-        /// The native widget was deleted outside ZUI; remount it on flush.
-        pub fn nativeDeleted(self: *Self, mounted: *Mounted) void {
-            if (mounted.widget) |*widget| Backend.forget(self.allocator, widget);
-            mounted.widget = null;
-            mounted.owner.invalidate();
-        }
+/// Free a declaration whose native state its successor adopted. Its children
+/// were reconciled separately and are not freed here.
+fn releaseRetired(node: *Node) void {
+    node.children.clearRetainingCapacity();
+    node.free();
+}
 
-        pub fn flush(self: *Self) !void {
-            if (self.busy or self.dispatch_depth != 0) return error.ReentrantFlush;
-            if (self.event_error) |err| {
-                self.event_error = null;
-                return err;
+/// Unmount a node; returns how many ordered native children it held.
+fn domRemoveNode(dom_parent: *Node, dom_offset: usize, child: *Node) isize {
+    if (child.is_virtual) {
+        var removed: isize = 0;
+        for (child.children.items) |sub| removed += domRemoveNode(dom_parent, dom_offset, sub);
+        return removed;
+    }
+    dom_parent.removeChild(dom_offset, child);
+    return if (child.is_outoforder) 0 else 1;
+}
+
+fn domAddNodes(dom_parent: *Node, dom_offset: usize, child: *Node, index: *usize) void {
+    if (child.is_virtual) {
+        for (child.children.items) |sub| domAddNodes(dom_parent, dom_offset, sub, index);
+        return;
+    }
+    dom_parent.addChild(dom_offset + index.*, child);
+    if (!child.is_outoforder) index.* += 1;
+}
+
+pub fn countDomChildren(nodes: []const *Node) isize {
+    var num: isize = 0;
+    for (nodes) |child| {
+        if (child.is_virtual) num += countDomChildren(child.children.items) else if (!child.is_outoforder) num += 1;
+    }
+    return num;
+}
+
+fn rebindDomParent(node: *Node, dom_parent: *Node) void {
+    node.dom_parent = dom_parent;
+    // A physical child owns the parent relationship for its own subtree.
+    if (node.is_virtual) for (node.children.items) |child| rebindDomParent(child, dom_parent);
+}
+
+fn gridKey(node: *const Node) [4]i32 {
+    const cell = node.options.grid;
+    return .{
+        if (cell.row) |v| v else -1,
+        if (cell.column) |v| v else -1,
+        if (cell.rowspan) |v| v else -1,
+        if (cell.columnspan) |v| v else -1,
+    };
+}
+fn gridLess(_: void, a: *Node, b: *Node) bool {
+    const left = gridKey(a);
+    const right = gridKey(b);
+    return std.mem.order(i32, &left, &right) == .lt;
+}
+
+fn prepareDom(node: *Node, new: *List) void {
+    if (node.is_grid_layout and node.options.columns == null) {
+        // Unplaced declarations never mount.
+        var kept: usize = 0;
+        for (new.items) |child| {
+            if (child.options.grid.row == null or child.options.grid.column == null) {
+                recurDelete(child, true);
+            } else {
+                new.items[kept] = child;
+                kept += 1;
             }
-            if (!self.view.observer.dirty and !hasDirtyView(self.root)) return;
-            self.busy = true;
-            defer self.busy = false;
-            var arena = std.heap.ArenaAllocator.init(self.allocator);
-            defer arena.deinit();
-            const next = if (self.view.observer.dirty) try self.view.prepare() else null;
-            errdefer if (next) |snapshot| snapshot.destroy();
-            const snapshot = next orelse self.view.snapshot.?;
-            const plan = try self.prepare(self.root, &snapshot.root, Backend.rootParent(), &self.view, arena.allocator());
-            errdefer self.discard(plan);
-            // Several newly prepared Views may subscribe to the same Signal. Reserve
-            // for all of them before any observer commits into its shared list.
-            const count = countUpdates(plan) + @as(usize, if (next != null) 1 else 0);
-            if (next) |pending| try reserveSignals(pending, count);
-            try reserveUpdates(plan, count);
-            self.commit(plan);
-            if (self.root) |old_root| {
-                if (old_root != plan.mounted) self.destroyMounted(old_root);
-            }
-            self.root = plan.mounted;
-            if (next) |pending| self.view.commit(pending);
-            self.render_count += 1;
         }
-        fn hasDirtyView(mounted: ?*Mounted) bool {
-            const current = mounted orelse return false;
-            if (current.view) |view| if (view.observer.dirty) return true;
-            for (current.children.items) |child| if (hasDirtyView(child)) return true;
-            return false;
-        }
-        fn countUpdates(plan: *Plan) usize {
-            var count: usize = if (plan.next_snapshot != null) 1 else 0;
-            for (plan.children) |child| count += countUpdates(child);
-            return count;
-        }
-        fn reserveSignals(snapshot: *Snapshot, count: usize) !void {
-            for (snapshot.dependencies.items) |signal|
-                try signal.observers.ensureUnusedCapacity(signal.allocator, count);
-        }
-        fn reserveUpdates(plan: *Plan, count: usize) !void {
-            if (plan.next_snapshot) |snapshot| try reserveSignals(snapshot, count);
-            for (plan.children) |child| try reserveUpdates(child, count);
-        }
+        new.shrinkRetainingCapacity(kept);
+        std.sort.insertion(*Node, new.items, {}, gridLess);
+        return;
+    }
+    // Ordered children first, then out-of-order ones (popups), as in CPPUI.
+    var ordered: usize = 0;
+    for (new.items, 0..) |child, i| {
+        if (child.is_outoforder) continue;
+        std.mem.rotate(*Node, new.items[ordered .. i + 1], i - ordered);
+        ordered += 1;
+    }
+    if (node.is_reversed_order) std.mem.reverse(*Node, new.items[0..ordered]);
+}
 
-        /// A borrowed retained View, valid until this subtree is removed.
-        pub fn findView(self: *Self, name: []const u8) ?*View {
-            return if (self.root) |root| findViewIn(root, name) else null;
-        }
-        fn findViewIn(mounted: *Mounted, name: []const u8) ?*View {
-            if (mounted.declaration.options.id) |own| {
-                if (std.mem.eql(u8, name, own)) if (mounted.view) |view| return view;
-            }
-            for (mounted.children.items) |child| {
-                if (findViewIn(child, name)) |view| return view;
-            }
-            return null;
-        }
-        /// Returns the first depth-first matching id. This handle is borrowed and
-        /// invalid after removal. Native deletion is observed and remounted on flush.
-        pub fn find(self: *Self, name: []const u8) ?Backend.Native {
-            return if (self.root) |root| findIn(root, name) else null;
-        }
-        fn findIn(mounted: *Mounted, name: []const u8) ?Backend.Native {
-            if (mounted.declaration.options.id) |own| {
-                if (std.mem.eql(u8, name, own)) if (mounted.widget) |*widget| return Backend.native(widget);
-            }
-            for (mounted.children.items) |child| {
-                if (findIn(child, name)) |found| return found;
-            }
-            return null;
-        }
+/// Reconcile `node`'s mounted children `old` with its new declarations `new`.
+/// Native children are mounted into `dom_parent` starting at `dom_offset`.
+/// On return, `new` is the mounted list and `old` may be discarded.
+pub fn sync(node: *Node, dom_parent: *Node, dom_offset: usize, old: *List, new: *List, depth: usize) anyerror!Result {
+    const allocator = node.allocator;
+    const orig_dom_children_num = countDomChildren(old.items);
+    var dom_children_num = orig_dom_children_num;
+    var dom_children_curr: isize = 0;
 
-        fn createMounted(self: *Self, declaration: *Declaration, parent: Backend.Parent, owner: *View) !*Mounted {
-            const mounted = try self.allocator.create(Mounted);
-            errdefer self.allocator.destroy(mounted);
-            mounted.* = .{ .dom = self, .owner = owner, .declaration = declaration };
-            if (declaration.kind == .view) {
-                const view = try self.allocator.create(View);
-                view.* = View.init(self.allocator, declaration.content.?);
-                mounted.view = view;
-                return mounted;
-            }
-            mounted.widget = try Backend.create(mounted, parent);
-            return mounted;
-        }
+    prepareDom(node, new);
 
-        fn prepare(self: *Self, previous: ?*Mounted, declaration: *Declaration, parent: Backend.Parent, owner: *View, arena: Allocator) anyerror!*Plan {
-            const old = if (previous) |current| (if (current.widget != null or current.view != null) current else null) else null;
-            const plan = try arena.create(Plan);
-            plan.* = .{
-                .mounted = old orelse try self.createMounted(declaration, parent, owner),
-                .declaration = declaration,
-                .is_new = old == null,
-            };
-            errdefer self.discard(plan);
-            var children = declaration.children.items;
-            const child_owner = plan.mounted.view orelse owner;
-            if (plan.mounted.view) |view| {
-                if (view.observer.dirty) plan.next_snapshot = try view.prepare();
-                const snapshot = plan.next_snapshot orelse view.snapshot.?;
-                children = snapshot.root.children.items;
-            }
-            const child_parent = if (plan.mounted.widget) |*widget| Backend.parentOf(widget) else parent;
-            plan.children = try arena.alloc(*Plan, children.len);
-            try plan.mounted.children.ensureTotalCapacity(self.allocator, children.len);
-            for (children, 0..) |child, index| {
-                var match: ?*Mounted = null;
-                if (old) |current| {
-                    for (current.children.items, 0..) |candidate, old_index| {
-                        if (node.sameIdentity(candidate.declaration, child, old_index, index)) {
-                            match = candidate;
-                            break;
+    var to_be_deleted = List.empty;
+    defer to_be_deleted.deinit(allocator);
+    var retired = List.empty;
+    defer retired.deinit(allocator);
+    // new[0..processed] and old[0..processed] are pairwise reconciled; old's
+    // entry is either the same node or a retired predecessor.
+    var processed: usize = 0;
+    errdefer {
+        for (new.items[processed..]) |child| recurDelete(child, true);
+        @memcpy(old.items[0..processed], new.items[0..processed]);
+        std.mem.swap(List, old, new);
+        for (retired.items) |child| releaseRetired(child);
+        for (to_be_deleted.items) |child| recurDelete(child, true);
+    }
+    try old.ensureUnusedCapacity(allocator, new.items.len);
+    try to_be_deleted.ensureTotalCapacity(allocator, old.items.len);
+    try retired.ensureTotalCapacity(allocator, old.items.len);
+
+    const offset: isize = @intCast(dom_offset);
+    var child_index: usize = 0;
+    while (child_index < new.items.len) : (child_index += 1) {
+        const new_node = new.items[child_index];
+        new_node.dom_parent = dom_parent;
+
+        while (true) {
+            // Step 1: the current nodes match.
+            if (child_index < old.items.len) {
+                const old_node = old.items[child_index];
+                if (old_node.eql(new_node)) {
+                    if (old_node.is_view) {
+                        // A retained View keeps its own children and subscriptions.
+                        dom_children_curr += countDomChildren(old_node.children.items);
+                        old_node.parent = new_node.parent;
+                        rebindDomParent(old_node, dom_parent);
+                        new.items[child_index] = old_node;
+                        recurDelete(new_node, true);
+                        processed = child_index + 1;
+                    } else {
+                        const was_mounted = Node.Backend.native(old_node) != null;
+                        try new_node.update(old_node);
+                        retired.appendAssumeCapacity(old_node);
+                        processed = child_index + 1;
+                        if (new_node.is_virtual) {
+                            const result = try sync(new_node, dom_parent, @intCast(offset + dom_children_curr), &old_node.children, &new_node.children, depth + 1);
+                            dom_children_curr += result.num;
+                            dom_children_num += result.delta;
+                        } else {
+                            // A native deleted outside ZUI was recreated at the end.
+                            if (!was_mounted) dom_parent.addChild(@intCast(offset + dom_children_curr), new_node);
+                            if (!new_node.is_outoforder) dom_children_curr += 1;
+                            if (!new_node.is_terminal)
+                                _ = try sync(new_node, new_node, 0, &old_node.children, &new_node.children, depth + 1);
                         }
                     }
+                    break;
                 }
-                plan.children[index] = try self.prepare(match, child, child_parent, child_owner, arena);
-                plan.prepared += 1;
             }
-            if (plan.mounted.widget != null) {
-                var physical = std.ArrayListUnmanaged(*const Declaration).empty;
-                try collectPhysical(plan, arena, &physical);
-                if (declaration.kind == .splitter and physical.items.len != 2) return error.InvalidPaneCount;
-                plan.layout = try Backend.prepareLayout(self.allocator, declaration, physical.items);
-            }
-            return plan;
-        }
-        // The same flattening as placeChild(), over declarations not yet committed.
-        fn collectPhysical(plan: *Plan, arena: Allocator, out: *std.ArrayListUnmanaged(*const Declaration)) !void {
-            for (plan.children) |child| {
-                if (child.mounted.view != null) try collectPhysical(child, arena, out) else try out.append(arena, child.declaration);
-            }
-        }
 
-        fn discard(self: *Self, plan: *Plan) void {
-            for (plan.children[0..plan.prepared]) |child| self.discard(child);
-            if (plan.layout) |layout| Backend.freeLayout(self.allocator, layout);
-            if (plan.next_snapshot) |snapshot| snapshot.destroy();
-            if (plan.is_new) self.destroyMounted(plan.mounted);
-        }
-        fn destroyMounted(self: *Self, mounted: *Mounted) void {
-            for (mounted.children.items) |child| self.destroyMounted(child);
-            mounted.children.deinit(self.allocator);
-            if (mounted.widget != null) Backend.destroy(self.allocator, mounted);
-            if (mounted.view) |view| {
-                view.deinit();
-                self.allocator.destroy(view);
+            // Step 2: trim old nodes that do not occur in the remaining new DOM.
+            var trimmed = false;
+            while (child_index < old.items.len and indexOfSince(new.items, child_index, old.items[child_index]) == null) {
+                const old_node = old.orderedRemove(child_index);
+                dom_children_num -= domRemoveNode(dom_parent, @intCast(offset + dom_children_curr), old_node);
+                to_be_deleted.appendAssumeCapacity(old_node);
+                trimmed = true;
             }
-            self.allocator.destroy(mounted);
-        }
+            if (trimmed) continue;
 
-        fn commit(self: *Self, plan: *Plan) void {
-            const mounted = plan.mounted;
-            for (mounted.children.items) |child| {
-                var retained = false;
-                for (plan.children) |next| {
-                    if (next.mounted == child) {
-                        retained = true;
-                        break;
-                    }
+            // Step 3: add the target or move an existing matching node.
+            const matched = if (new_node.is_movable) indexOfSince(old.items, child_index + 1, new_node) else null;
+            if (matched) |matched_index| {
+                if (matched_index == child_index + 1 and old.items[child_index].is_movable) {
+                    // Step 3-2-1: yield the next position by requeueing its blocker.
+                    const blocker = old.orderedRemove(child_index);
+                    const n = domRemoveNode(dom_parent, @intCast(offset + dom_children_curr), blocker);
+                    var index: usize = 0;
+                    domAddNodes(dom_parent, @intCast(offset + dom_children_num - n), blocker, &index);
+                    old.appendAssumeCapacity(blocker);
+                } else {
+                    // Step 3-2-2: move the target into the current position.
+                    const old_node = old.items[matched_index];
+                    const source = offset + countDomChildren(old.items[0..matched_index]);
+                    _ = old.orderedRemove(matched_index);
+                    _ = domRemoveNode(dom_parent, @intCast(source), old_node);
+                    var index: usize = 0;
+                    domAddNodes(dom_parent, @intCast(offset + dom_children_curr), old_node, &index);
+                    old.insertAssumeCapacity(child_index, old_node);
                 }
-                if (!retained) self.destroyMounted(child);
+                continue; // Step 1 reconciles the moved node.
             }
-            if (mounted.widget) |*widget| {
-                Backend.update(self.allocator, widget, plan.declaration, plan.layout);
-                plan.layout = null;
+
+            // Step 3-1: new node.
+            try new_node.update(null);
+            old.insertAssumeCapacity(child_index, new_node);
+            processed = child_index + 1;
+            if (new_node.is_virtual) {
+                var empty = List.empty;
+                defer empty.deinit(allocator);
+                const result = try sync(new_node, dom_parent, @intCast(offset + dom_children_curr), &empty, &new_node.children, depth + 1);
+                dom_children_curr += result.num;
+                dom_children_num += result.num;
+            } else {
+                dom_parent.addChild(@intCast(offset + dom_children_curr), new_node);
+                if (!new_node.is_outoforder) {
+                    dom_children_curr += 1;
+                    dom_children_num += 1;
+                }
+                if (!new_node.is_terminal) {
+                    var empty = List.empty;
+                    defer empty.deinit(allocator);
+                    _ = try sync(new_node, new_node, 0, &empty, &new_node.children, depth + 1);
+                }
             }
-            mounted.declaration = plan.declaration;
-            mounted.children.clearRetainingCapacity();
-            for (plan.children) |child| {
-                self.commit(child);
-                mounted.children.appendAssumeCapacity(child.mounted);
-            }
-            if (mounted.widget) |*widget| {
-                var index: usize = 0;
-                for (mounted.children.items) |child| placeChild(widget, plan.declaration, child, &index);
-                Backend.finish(widget, plan.declaration);
-            }
-            if (plan.next_snapshot) |snapshot| mounted.view.?.commit(snapshot);
+            break;
         }
-        // Virtual Views contribute zero or more native children to their nearest
-        // physical parent. They never add a native container of their own.
-        fn placeChild(parent: *Backend.Widget, declaration: *const Declaration, child: *Mounted, index: *usize) void {
-            if (child.view != null) {
-                for (child.children.items) |nested| placeChild(parent, declaration, nested, index);
-                return;
-            }
-            Backend.place(parent, declaration, &child.widget.?, index.*);
-            index.* += 1;
-        }
-    };
+    }
+
+    // Step 4: trim the old trail.
+    while (old.items.len > new.items.len) {
+        const old_node = old.orderedRemove(new.items.len);
+        dom_children_num -= domRemoveNode(dom_parent, @intCast(offset + dom_children_curr), old_node);
+        to_be_deleted.appendAssumeCapacity(old_node);
+    }
+
+    for (new.items) |child| child.postUpdate();
+    try node.postSync();
+    if (node.is_virtual and dom_parent != node) try dom_parent.postSync();
+
+    // Every new node is mounted; nothing below may fail.
+    processed = new.items.len;
+    @memcpy(old.items[0..processed], new.items);
+    for (to_be_deleted.items) |child| recurDelete(child, true);
+    to_be_deleted.clearRetainingCapacity();
+    for (retired.items) |child| releaseRetired(child);
+    retired.clearRetainingCapacity();
+
+    if (dom_children_curr != dom_children_num) return error.DomChildCountMismatch;
+    return .{ .num = dom_children_curr, .delta = dom_children_num - orig_dom_children_num };
 }

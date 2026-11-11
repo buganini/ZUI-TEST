@@ -176,7 +176,7 @@ test "Views recipe updates one counter and retains hidden pages and editor caret
     c.lv_textarea_set_cursor_pos(editor, 1);
     try click(app, "A");
     try std.testing.expectEqual(1, gallery.model.pages.a.count.peek());
-    try std.testing.expectEqual(1, app.dom.view.render_count);
+    try std.testing.expectEqual(1, app.root.view.render_count);
     try std.testing.expectEqual(2, first.render_count);
     try std.testing.expectEqual(1, second.render_count);
     try check(app, "view-switch", true);

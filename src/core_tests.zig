@@ -6,7 +6,45 @@ const TextState = core.TextState;
 const Signal = core.Signal;
 const Observer = core.Observer;
 const Binding = core.Binding;
-const Snapshot = core.Snapshot;
+const View = core.View;
+const Backend = core.Node.Backend;
+
+const Empty = struct {
+    pub fn content(_: *@This(), _: *core.Builder) void {}
+};
+var empty_model = Empty{};
+
+/// Declarations outside content(): a detached View and its build context,
+/// standing in for the scope stack CPPUI's tests construct nodes under.
+const Snapshot = struct {
+    allocator: Allocator,
+    view: *View,
+    build: core.node.Build,
+
+    fn create(allocator: Allocator) !*Snapshot {
+        const self = try allocator.create(Snapshot);
+        errdefer allocator.destroy(self);
+        const view = try allocator.create(View);
+        view.* = View.init(core.Node.init(allocator, .view), core.view.Content.init(&empty_model));
+        self.* = .{ .allocator = allocator, .view = view, .build = .{ .allocator = allocator, .view = view } };
+        return self;
+    }
+    fn destroy(self: *Snapshot) void {
+        self.build.dependencies.deinit(self.allocator);
+        core.dom.recurDelete(&self.view.node, true);
+        self.allocator.destroy(self);
+    }
+    fn builder(self: *Snapshot) core.Builder {
+        return .{ .build = &self.build, .parent = &self.view.node };
+    }
+    fn finish(self: *Snapshot) !void {
+        if (self.build.failure) |err| return err;
+        for (self.view.node.children.items) |child| View.validate(child) catch |err| {
+            self.build.fail(err);
+            return err;
+        };
+    }
+};
 
 test "conditional dependencies change only on successful commit and writes coalesce" {
     const a = std.testing.allocator;
@@ -58,12 +96,12 @@ test "builder owns ids and text and rejects duplicate sibling keys" {
     _ = ui.label(&text).id("a");
     text[0] = 'x';
     try snapshot.finish();
-    try std.testing.expectEqualStrings("ok", snapshot.root.children.items[0].text);
+    try std.testing.expectEqualStrings("ok", snapshot.view.node.children.items[0].text);
     _ = ui.button("duplicate").id("a");
     const invalid = ui.grid(.{}).columns(0, .{});
     _ = invalid.label("ignored");
     ui.fail(error.LaterError);
-    try std.testing.expectEqual(2, snapshot.root.children.items.len);
+    try std.testing.expectEqual(2, snapshot.view.node.children.items.len);
     try std.testing.expectError(error.DuplicateId, snapshot.finish());
     try std.testing.expectError(error.DuplicateId, snapshot.finish());
 }
@@ -115,7 +153,7 @@ test "tracking allocation failure keeps real state values and suppresses later w
         _ = child.labelFmt("still safe: {s}", .{text.get(&ui)});
     }
     try std.testing.expectEqual(0, probe.reads);
-    try std.testing.expectEqual(0, snapshot.root.children.items.len);
+    try std.testing.expectEqual(0, snapshot.view.node.children.items.len);
     try std.testing.expectError(error.OutOfMemory, snapshot.finish());
 }
 
@@ -156,8 +194,8 @@ fn allocationScenario(allocator: Allocator) !void {
     _ = panes.label("Left");
     _ = panes.label("Right");
     try snapshot.finish();
-    try observer.prepare(snapshot.dependencies.items);
-    observer.commit(snapshot.dependencies.items);
+    try observer.prepare(snapshot.build.dependencies.items);
+    observer.commit(snapshot.build.dependencies.items);
     try text.set("updated");
 }
 
@@ -208,7 +246,7 @@ test "a failed modifier disables copies and chains while preserving the first er
     _ = ui.labelFmt("ignored {d}", .{10});
     ui.fail(error.LaterFailure);
     try std.testing.expect(invalid.parent == null);
-    try std.testing.expectEqual(2, snapshot.root.children.items.len);
+    try std.testing.expectEqual(2, snapshot.view.node.children.items.len);
     try std.testing.expectEqual(80, before.parent.?.options.width.?);
     try std.testing.expect(before.parent.?.options.id == null);
     try std.testing.expectError(error.InvalidLayout, snapshot.finish());
@@ -379,7 +417,201 @@ test "grid placement follows PUI: manual cells, dense modes, spans and expansion
         .{ .row = 2, .column = 0, .columnspan = 2 },
     }, g.cells);
 
-    try std.testing.expect(snapshot.failure == null);
+    try std.testing.expect(snapshot.build.failure == null);
     _ = ui.label("x").gridCell(.{ .rowspan = 0 });
-    try std.testing.expectEqual(error.InvalidLayout, snapshot.failure.?);
+    try std.testing.expectEqual(error.InvalidLayout, snapshot.build.failure.?);
+}
+
+// Reconciliation, checked against the native-free backend like CPPUI's
+// tests/core_reconciliation.cpp: every physical node's records must equal its
+// flattened declarations, in order.
+
+fn collectPhysical(node: *core.Node, out: *std.ArrayListUnmanaged(*core.Node)) !void {
+    for (node.children.items) |child| {
+        if (child.is_virtual) try collectPhysical(child, out) else try out.append(std.testing.allocator, child);
+    }
+}
+fn expectMountedOrder(node: *core.Node) !void {
+    if (!node.is_virtual) {
+        var physical = std.ArrayListUnmanaged(*core.Node).empty;
+        defer physical.deinit(std.testing.allocator);
+        try collectPhysical(node, &physical);
+        const record = Backend.native(node).?;
+        try std.testing.expectEqual(physical.items.len, record.len);
+        for (physical.items, record.items()) |child, native| try std.testing.expectEqual(Backend.native(child).?, native);
+    }
+    for (node.children.items) |child| try expectMountedOrder(child);
+}
+fn serial(root: *core.Root, id: []const u8) usize {
+    return root.find(id).?.serial;
+}
+
+const Items = struct {
+    keys: []const []const u8 = &.{ "a", "b", "c" },
+    kinds: []const core.node.Kind = &.{},
+    nested: ?*Items = null,
+    nested_at: usize = 0,
+    grid: bool = false,
+    calls: usize = 0,
+    pub fn content(self: *@This(), ui: *core.Builder) void {
+        self.calls += 1;
+        const box = if (self.grid) ui.grid(.{}).id("box") else ui.vbox(.{}).id("box");
+        for (self.keys, 0..) |key, index| {
+            if (self.nested) |nested| if (index == self.nested_at) {
+                _ = box.subView(nested).id("nested");
+            };
+            if (self.grid) {
+                const cell: core.GridCell = if (key[0] == '_') .{} else .{ .row = @intCast(index % 2), .column = @intCast(index / 2) };
+                _ = box.label(key).id(key).gridCell(cell);
+            } else _ = box.label(key).id(key);
+        }
+        for (self.kinds) |kind| _ = switch (kind) {
+            .button => box.button("b"),
+            .spacer => box.spacer(),
+            else => box.label("l"),
+        };
+    }
+};
+
+test "keyed moves reuse natives and keep mounted order" {
+    var model = Items{};
+    var root: core.Root = undefined;
+    try root.init(std.testing.allocator, &model);
+    defer root.deinit();
+    try root.flush();
+    const a = serial(&root, "a");
+    const c = serial(&root, "c");
+    const created = Backend.created;
+    for ([_][]const []const u8{
+        &.{ "c", "b", "a" },
+        &.{ "b", "c", "a", "d" },
+        &.{ "a", "d" },
+        &.{ "d", "e", "a", "c" },
+    }) |keys| {
+        model.keys = keys;
+        root.invalidate();
+        try root.flush();
+        try expectMountedOrder(root.container);
+    }
+    try std.testing.expectEqual(a, serial(&root, "a"));
+    try std.testing.expect(serial(&root, "c") != c); // "c" was removed in between
+    // One record per new key: d, e and the re-added c.
+    try std.testing.expectEqual(created + 3, Backend.created);
+}
+
+test "unkeyed siblings match by type in sequence, as in CPPUI" {
+    var model = Items{ .keys = &.{}, .kinds = &.{ .label, .button, .label } };
+    var root: core.Root = undefined;
+    try root.init(std.testing.allocator, &model);
+    defer root.deinit();
+    try root.flush();
+    const box = Backend.native(root.view.node.children.items[0]).?;
+    const button = box.items()[1];
+    const second_label = box.items()[2];
+    const created = Backend.created;
+    // Removing the first label keeps the button and a label (step 3-2-1 requeues
+    // the first label, so the second one is retained); index matching would
+    // have remounted both.
+    model.kinds = &.{ .button, .label };
+    root.invalidate();
+    try root.flush();
+    try expectMountedOrder(root.container);
+    try std.testing.expectEqual(created, Backend.created);
+    try std.testing.expectEqual(button, box.items()[0]);
+    try std.testing.expectEqual(second_label, box.items()[1]);
+    // Spacers are not movable: a blocked spacer is recreated, not moved.
+    model.kinds = &.{ .spacer, .button };
+    root.invalidate();
+    try root.flush();
+    try expectMountedOrder(root.container);
+    try std.testing.expectEqual(button, box.items()[1]);
+}
+
+test "Views flatten into their physical parent and redraw at their offset" {
+    var inner = Items{ .keys = &.{ "x", "y" } };
+    var model = Items{ .nested = &inner, .nested_at = 1 };
+    var root: core.Root = undefined;
+    try root.init(std.testing.allocator, &model);
+    defer root.deinit();
+    try root.flush();
+    try expectMountedOrder(root.container);
+    // A View contributes no native of its own: its box mounts into the outer box.
+    const outer = Backend.native(root.view.node.children.items[0]).?;
+    try std.testing.expectEqual(4, outer.len);
+    inner.keys = &.{ "y", "z", "x" };
+    root.findView("nested").?.invalidate();
+    try root.flush();
+    try std.testing.expectEqual(1, model.calls);
+    try expectMountedOrder(root.container);
+    // Moving the View moves its whole subtree.
+    model.nested_at = 0;
+    model.keys = &.{ "c", "a", "b" };
+    root.invalidate();
+    try root.flush();
+    try std.testing.expectEqual(2, inner.calls);
+    try expectMountedOrder(root.container);
+    try std.testing.expectEqual(0, root.findView("nested").?.observer.dependencies.items.len);
+}
+
+test "manual grids never mount unplaced children and mount the rest in cell order" {
+    var model = Items{ .keys = &.{ "a", "_unplaced", "b", "c" }, .grid = true };
+    var root: core.Root = undefined;
+    try root.init(std.testing.allocator, &model);
+    defer root.deinit();
+    try root.flush();
+    try std.testing.expect(root.find("_unplaced") == null);
+    try expectMountedOrder(root.container);
+    // (row, column): a=(0,0), b=(0,1), c=(1,1) mount in that order.
+    const grid = root.view.node.children.items[0];
+    const ids = [_][]const u8{ "a", "b", "c" };
+    for (grid.children.items, ids) |child, id| try std.testing.expectEqualStrings(id, child.options.id.?);
+}
+
+test "a failed native creation keeps the mounted tree consistent and retries" {
+    var model = Items{};
+    var root: core.Root = undefined;
+    try root.init(std.testing.allocator, &model);
+    defer root.deinit();
+    try root.flush();
+    model.keys = &.{ "a", "new", "c" };
+    root.invalidate();
+    Backend.fail_create = true;
+    try std.testing.expectError(error.NativeCreateFailed, root.flush());
+    Backend.fail_create = false;
+    try expectMountedOrder(root.container);
+    try std.testing.expect(root.view.observer.dirty);
+    try root.flush();
+    try expectMountedOrder(root.container);
+    try std.testing.expect(root.find("new") != null and root.find("b") == null);
+}
+
+fn syncAllocationScenario(allocator: Allocator) !void {
+    var inner = Items{ .keys = &.{ "x", "y" } };
+    var model = Items{ .nested = &inner, .nested_at = 1, .kinds = &.{ .label, .button } };
+    var root: core.Root = undefined;
+    try root.init(allocator, &model);
+    defer root.deinit();
+    root.flush() catch |err| {
+        try root.flush();
+        try expectMountedOrder(root.container);
+        return err;
+    };
+    model.keys = &.{ "c", "d", "a" };
+    model.nested_at = 2;
+    model.kinds = &.{ .button, .label, .label };
+    inner.keys = &.{ "y", "z" };
+    root.invalidate();
+    root.findView("nested").?.invalidate();
+    root.flush() catch |err| {
+        try expectMountedOrder(root.container);
+        try root.flush();
+        try expectMountedOrder(root.container);
+        try std.testing.expect(root.find("z") != null and root.find("b") == null);
+        return err;
+    };
+}
+
+test "every allocation failure during sync leaves a consistent, retryable tree" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, syncAllocationScenario, .{});
+    try std.testing.expectEqual(0, Backend.live);
 }

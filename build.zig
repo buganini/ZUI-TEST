@@ -3,12 +3,21 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const core = b.addModule("zui_core", .{
+    // Like cppui/backend.hpp, core reaches its widgets through a backend chosen
+    // at build time: a native-free one for core tests, LVGL for the library.
+    const test_core = b.createModule(.{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
         .optimize = optimize,
     });
-    const core_tests = b.addTest(.{ .root_module = core });
+    const test_backend = b.createModule(.{
+        .root_source_file = b.path("src/testing/backend.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "core", .module = test_core }},
+    });
+    test_core.addImport("backend", test_backend);
+    const core_tests = b.addTest(.{ .root_module = test_core });
     const core_run = b.addRunArtifact(core_tests);
     b.step("test-core", "Test the reactive core without LVGL").dependOn(&core_run.step);
 
@@ -36,6 +45,22 @@ pub fn build(b: *std.Build) void {
     c.addIncludePath(b.path("native"));
     c.addIncludePath(lvgl_dir);
     const cmod = c.createModule();
+    const core = b.addModule("zui_core", .{
+        .root_source_file = b.path("src/core.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const lvgl = b.createModule(.{
+        .root_source_file = b.path("src/lvgl/backend.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "c", .module = cmod },
+            .{ .name = "core", .module = core },
+        },
+    });
+    core.addImport("backend", lvgl);
     const zui = b.addModule("zui", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -44,6 +69,7 @@ pub fn build(b: *std.Build) void {
     });
     zui.addImport("c", cmod);
     zui.addImport("core", core);
+    zui.addImport("lvgl", lvgl);
     zui.addObjectFile(native_dir.path(b, "libzui_native.a"));
     zui.addObjectFile(native_dir.path(b, "liblvgl.a"));
     zui.linkSystemLibrary("SDL2", .{});

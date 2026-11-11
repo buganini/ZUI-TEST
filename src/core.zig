@@ -8,15 +8,14 @@ pub const Layout = node.Layout;
 pub const Style = node.Style;
 pub const GridCell = node.GridCell;
 pub const Node = node.Node;
-pub const Snapshot = node.Snapshot;
 pub const callback = node.callback;
-pub const sameIdentity = node.sameIdentity;
 pub const State = state.State;
 pub const TextState = state.TextState;
 pub const Binding = state.Binding;
 pub const Signal = state.Signal;
 pub const Observer = state.Observer;
 pub const View = view.View;
+pub const Root = view.Root;
 
 test {
     _ = @import("core_tests.zig");

@@ -83,7 +83,7 @@ test "subviews update independently and keyed moves retain native and View ident
     try std.testing.expectEqualStrings("3", label(app, "x"));
 }
 
-test "failed sibling content rolls back the whole flush and dependency changes" {
+test "a failed sibling View keeps its mounted tree while earlier redraws commit" {
     var x = zui.State(i32).init(a, 1);
     defer x.deinit();
     var y = zui.State(i32).init(a, 2);
@@ -98,12 +98,13 @@ test "failed sibling content rolls back the whole flush and dependency changes" 
     first.use_alternate = true;
     second.fail = true;
     try x.set(3);
+    // Each View redraws on its own, as in CPPUI: the first commits.
     try std.testing.expectError(error.ChildFailed, app.flush());
-    try std.testing.expectEqualStrings("1", label(app, "x"));
+    try std.testing.expectEqualStrings("2", label(app, "x"));
     try std.testing.expectEqualStrings("1", label(app, "y"));
-    try std.testing.expectEqual(2, x.signal.observers.items.len);
-    try std.testing.expectEqual(0, y.signal.observers.items.len);
-    try std.testing.expectEqual(1, app.findView("first").?.render_count);
+    try std.testing.expectEqual(1, x.signal.observers.items.len);
+    try std.testing.expectEqual(1, y.signal.observers.items.len);
+    try std.testing.expectEqual(2, app.findView("first").?.render_count);
     second.fail = false;
     try app.flush();
     try std.testing.expectEqual(1, x.signal.observers.items.len);
@@ -232,15 +233,18 @@ fn allocationScenario(allocator: std.mem.Allocator) !void {
     second.count = 2;
     try value.set(2);
     app.flush() catch |err| {
-        try std.testing.expectEqualStrings("1", label(app, "x"));
-        try std.testing.expectEqualStrings("1", label(app, "y"));
+        // Whatever committed stays; the retry finishes the remaining Views.
+        try app.flush();
+        try std.testing.expectEqualStrings("2", label(app, "x"));
+        try std.testing.expectEqualStrings("2", label(app, "y"));
         try std.testing.expectEqual(2, value.signal.observers.items.len);
-        try std.testing.expectEqual(1, app.findView("first").?.render_count);
+        try std.testing.expectEqual(2, app.findView("first").?.render_count);
+        try std.testing.expectEqual(1 + 3 + 2 + 1, c.lv_obj_get_child_count(app.find("grid").?));
         return err;
     };
 }
 
-test "all subview and shared-subscription allocation failures preserve the committed tree" {
+test "all subview and shared-subscription allocation failures leave a consistent, retryable tree" {
     try std.testing.checkAllAllocationFailures(a, allocationScenario, .{});
 }
 
@@ -271,7 +275,7 @@ test "nested Views sharing a Signal commit all subscriptions before independent 
     try value.set(2);
     try app.flush();
     try std.testing.expectEqual(13, value.signal.observers.items.len);
-    try std.testing.expectEqual(1, app.dom.view.render_count);
+    try std.testing.expectEqual(1, app.root.view.render_count);
     try std.testing.expectEqual(2, app.findView("branch").?.render_count);
     for (branch.children) |child| try std.testing.expectEqual(2, child.calls);
 }
