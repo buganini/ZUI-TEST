@@ -364,3 +364,58 @@ test "splitter resizes retained panes, clamps keyboard input and rejects missing
     try std.testing.expectError(error.InvalidPaneCount, app.flush());
     try std.testing.expectEqual(right, app.find("right").?);
 }
+
+test "inverse boxes, spacers, dividers, clickable labels and unbound splitters" {
+    const Layouts = struct {
+        inverse: bool = false,
+        clicks: usize = 0,
+        pub fn content(self: *@This(), ui: *zui.Builder) void {
+            const root = ui.vbox(.{}).layout(.{ .height_percent = 100 });
+            const row = root.hbox(.{ .inverse = self.inverse }).id("row");
+            _ = row.label("Left").id("left").click(zui.callback(self, clicked));
+            _ = row.spacer().id("gap");
+            _ = row.divider().id("line");
+            _ = row.label("Right").id("right");
+            const panes = root.splitter(.{}).id("panes").layout(.{ .height = 200 });
+            _ = panes.label("A").id("a");
+            _ = panes.label("B").id("b");
+        }
+        fn clicked(self: *@This()) !void {
+            self.clicks += 1;
+        }
+    };
+    var model = Layouts{};
+    const app = try zui.Application.create(a, &model, .{ .width = 800, .height = 600 });
+    defer app.destroy();
+    try app.flush();
+    const row = app.find("row").?;
+    const left = app.find("left").?;
+    const right = app.find("right").?;
+    c.lv_obj_update_layout(row);
+    // The spacer pushes the last label to the far edge; the divider spans the row.
+    try std.testing.expect(c.lv_obj_get_width(app.find("gap").?) > 400);
+    try std.testing.expectEqual(1, c.lv_obj_get_width(app.find("line").?));
+    try std.testing.expect(c.lv_obj_get_x(right) > c.lv_obj_get_x(left));
+    model.inverse = true;
+    app.invalidate();
+    try app.flush();
+    c.lv_obj_update_layout(row);
+    try std.testing.expectEqual(left, app.find("left").?);
+    try std.testing.expect(c.lv_obj_get_x(right) < c.lv_obj_get_x(left));
+    click(left);
+    try std.testing.expectEqual(1, model.clicks);
+
+    // Without .ratio(), keyboard resizing is kept by the retained splitter.
+    const panes = app.find("panes").?;
+    const handle = c.lv_obj_get_child(panes, 1);
+    c.lv_obj_update_layout(panes);
+    const initial = c.lv_obj_get_width(app.find("a").?);
+    var key: u32 = c.LV_KEY_RIGHT;
+    _ = c.lv_obj_send_event(handle, c.LV_EVENT_KEY, &key);
+    try app.flush();
+    model.inverse = false;
+    app.invalidate();
+    try app.flush();
+    c.lv_obj_update_layout(panes);
+    try std.testing.expect(c.lv_obj_get_width(app.find("a").?) > initial);
+}

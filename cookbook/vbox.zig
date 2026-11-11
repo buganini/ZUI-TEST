@@ -2,20 +2,20 @@ const zui = @import("zui");
 const Model = @import("model.zig").Model;
 
 pub fn content(model: *Model, ui: *zui.Builder) void {
-    _ = ui.checkbox("Reverse order", model.inverse_v.binding()).id("vbox-inverse");
-    const reverse = model.inverse_v.get(ui);
-    _ = ui.label("Default gap: 8 pixels");
-    var column = ui.vbox(.{}).id("vbox-default");
-    items(&column, reverse);
-    _ = ui.label("Gap: 20 pixels; padding: 12 pixels").layout(.{ .width_percent = 100 });
-    var spaced = ui.vbox(.{ .gap = 20 }).layout(.{ .padding = 12 }).style(.{ .bg_color = 0xfff7e6 });
-    items(&spaced, reverse);
+    const inverse = model.inverse_v.get(ui);
+    _ = ui.checkbox("Reverse vertical order", model.inverse_v.binding()).id("vbox-inverse");
+    const rows = ui.vbox(.{ .inverse = inverse });
+    _ = rows.label("Row 1");
+    _ = rows.divider();
+    _ = rows.label("Row 2");
+    _ = ui.divider();
+    _ = ui.label("Default gap: 10 pixels");
+    items(ui.vbox(.{ .inverse = inverse }));
+    _ = ui.divider();
+    _ = ui.label("gap=12 pixels");
+    items(ui.vbox(.{ .inverse = inverse, .gap = 12 }).id("vbox-gap"));
 }
 
-fn items(column: *zui.Builder, reverse: bool) void {
-    const names = [_][]const u8{ "First", "Second", "Third" };
-    for (0..names.len) |index| {
-        const name = names[if (reverse) names.len - 1 - index else index];
-        _ = column.label(name).id(name);
-    }
+fn items(column: zui.Builder) void {
+    for ([_][]const u8{ "First", "Second", "Third" }) |name| _ = column.label(name).id(name);
 }

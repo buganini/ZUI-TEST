@@ -2,25 +2,27 @@ const zui = @import("zui");
 const Model = @import("model.zig").Model;
 
 pub fn content(model: *Model, ui: *zui.Builder) void {
-    _ = ui.checkbox("Reverse order", model.inverse_h.binding()).id("hbox-inverse");
-    const reverse = model.inverse_h.get(ui);
-    _ = ui.label("Default gap: 8 pixels");
-    var row = ui.hbox(.{}).id("hbox-default");
-    items(&row, reverse);
-    _ = ui.label("Gap: 20 pixels");
-    var spaced = ui.hbox(.{ .gap = 20 });
-    items(&spaced, reverse);
-    _ = ui.label("The middle label takes the remaining width.").layout(.{ .width_percent = 100 });
-    const weighted = ui.hbox(.{});
-    _ = weighted.label("Left");
-    _ = weighted.label("Flexible").layout(.{ .width = 0, .weight = 1 }).style(.{ .bg_color = 0xfff7e6 });
-    _ = weighted.label("Right");
+    const inverse = model.inverse_h.get(ui);
+    _ = ui.checkbox("Reverse horizontal order", model.inverse_h.binding()).id("hbox-inverse");
+    const spaced = ui.hbox(.{ .inverse = inverse }).id("spacer-row");
+    _ = spaced.label("Column 1");
+    _ = spaced.divider();
+    _ = spaced.spacer().id("row-gap");
+    _ = spaced.label("Column 2").id("row-end");
+    const weighted = ui.hbox(.{ .inverse = inverse });
+    _ = weighted.label("Column 1");
+    _ = weighted.divider();
+    _ = weighted.label("Column 2").layout(.{ .width = 0, .weight = 1 });
+    _ = weighted.divider();
+    _ = weighted.label("Column 3");
+    _ = ui.divider();
+    _ = ui.label("Default gap: 10 pixels");
+    items(ui.hbox(.{ .inverse = inverse }));
+    _ = ui.divider();
+    _ = ui.label("gap=12 pixels");
+    items(ui.hbox(.{ .inverse = inverse, .gap = 12 }).id("hbox-gap"));
 }
 
-fn items(row: *zui.Builder, reverse: bool) void {
-    const names = [_][]const u8{ "First", "Second", "Third" };
-    for (0..names.len) |index| {
-        const name = names[if (reverse) names.len - 1 - index else index];
-        _ = row.label(name).id(name);
-    }
+fn items(row: zui.Builder) void {
+    for ([_][]const u8{ "First", "Second", "Third" }) |name| _ = row.label(name).id(name);
 }
