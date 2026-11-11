@@ -251,6 +251,35 @@ test "splitter resizes retained panes, clamps keyboard input and rejects missing
     const handle = c.lv_obj_get_child(panes, 1);
     c.lv_obj_update_layout(panes);
     const initial = c.lv_obj_get_width(left);
+    const Pointer = struct {
+        point: c.lv_point_t,
+        pressed: bool = true,
+        fn read(indev: ?*c.lv_indev_t, data: [*c]c.lv_indev_data_t) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(c.lv_indev_get_user_data(indev).?));
+            data.*.point = self.point;
+            data.*.state = if (self.pressed) c.LV_INDEV_STATE_PRESSED else c.LV_INDEV_STATE_RELEASED;
+        }
+    };
+    var coords: c.lv_area_t = undefined;
+    c.lv_obj_get_coords(handle, &coords);
+    var pointer_data = Pointer{ .point = .{ .x = coords.x1 + 4, .y = coords.y1 + 20 } };
+    const pointer = c.lv_indev_create().?;
+    defer c.lv_indev_delete(pointer);
+    c.lv_indev_set_type(pointer, c.LV_INDEV_TYPE_POINTER);
+    c.lv_indev_set_mode(pointer, c.LV_INDEV_MODE_EVENT);
+    c.lv_indev_set_user_data(pointer, &pointer_data);
+    c.lv_indev_set_read_cb(pointer, Pointer.read);
+    c.lv_indev_read(pointer);
+    pointer_data.point.x = 560;
+    c.lv_indev_read(pointer);
+    try app.flush();
+    try std.testing.expectEqual(70, model.ratio.peek());
+    c.lv_obj_update_layout(panes);
+    try std.testing.expect(c.lv_obj_get_width(left) > initial);
+    pointer_data.pressed = false;
+    c.lv_indev_read(pointer);
+    try model.ratio.set(50);
+    try app.flush();
     var key: u32 = c.LV_KEY_RIGHT;
     for (0..3) |_| _ = c.lv_obj_send_event(handle, c.LV_EVENT_KEY, &key);
     try std.testing.expectEqual(65, model.ratio.peek());

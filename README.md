@@ -78,7 +78,7 @@ zig build snapshot -Dlvgl-dir=../CPPUI/lvgl-9.6.0
 
 `test` covers state subscriptions, coalesced updates, builder failures,
 checkbox/text bindings, caret retention, keyed reordering/removal, native
-subtree deletion, deferred SDL quit, splitter sizing, cookbook navigation,
+subtree deletion, deferred SDL quit, splitter pointer/keyboard resizing, cookbook navigation,
 source reload and the complete demo. Allocation-failure
 checks exercise every Zig allocation on representative build/update paths.
 Zig's testing allocator checks for leaked Zig allocations.
