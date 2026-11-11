@@ -55,15 +55,15 @@ test "builder owns keys and text and rejects duplicate sibling keys" {
     defer snapshot.destroy();
     var ui = snapshot.builder();
     var text = [_]u8{ 'o', 'k' };
-    ui.label(&text, .{ .key = "a" });
+    _ = ui.label(&text).key("a");
     text[0] = 'x';
     try snapshot.finish();
     try std.testing.expectEqualStrings("ok", snapshot.root.children.items[0].text);
-    ui.button("duplicate", .{ .key = "a" });
-    var invalid = ui.grid(.{ .columns = 0 });
-    invalid.label("ignored", .{});
+    _ = ui.button("duplicate").key("a");
+    const invalid = ui.grid().columns(0);
+    _ = invalid.label("ignored");
     ui.fail(error.LaterError);
-    try std.testing.expectEqual(1, snapshot.root.children.items.len);
+    try std.testing.expectEqual(2, snapshot.root.children.items.len);
     try std.testing.expectError(error.DuplicateKey, snapshot.finish());
     try std.testing.expectError(error.DuplicateKey, snapshot.finish());
 }
@@ -72,11 +72,11 @@ test "invalid containers remain safe and disable previously copied builders" {
     const snapshot = try Snapshot.create(std.testing.allocator);
     defer snapshot.destroy();
     var ui = snapshot.builder();
-    var sibling = ui.vbox(.{});
-    var invalid = ui.grid(.{ .columns = 0 });
-    var nested = invalid.hbox(.{});
-    nested.labelFmt("Ignored {d}", .{42}, .{});
-    sibling.button("also ignored", .{});
+    const sibling = ui.vbox();
+    const invalid = ui.grid().columns(0);
+    const nested = invalid.hbox();
+    _ = nested.labelFmt("Ignored {d}", .{42});
+    _ = sibling.button("also ignored");
     try std.testing.expect(invalid.parent == null);
     try std.testing.expect(nested.parent == null);
     try std.testing.expectEqual(0, sibling.parent.?.children.items.len);
@@ -110,9 +110,9 @@ test "tracking allocation failure keeps real state values and suppresses later w
     var probe = Probe{};
     const binding = Binding(bool){ .context = &probe, .read = Probe.read, .write = Probe.write };
     for (0..count) |_| {
-        var child = ui.vbox(.{});
-        child.checkbox("skipped getter", binding, .{});
-        child.labelFmt("still safe: {s}", .{text.get(&ui)}, .{});
+        const child = ui.vbox();
+        _ = child.checkbox("skipped getter", binding);
+        _ = child.labelFmt("still safe: {s}", .{text.get(&ui)});
     }
     try std.testing.expectEqual(0, probe.reads);
     try std.testing.expectEqual(0, snapshot.root.children.items.len);
@@ -125,8 +125,8 @@ test "splitter child counts are checked after content declarations finish" {
     var ratio = State(u8).init(std.testing.allocator, 50);
     defer ratio.deinit();
     var ui = snapshot.builder();
-    var panes = ui.splitter(ratio.binding(), .{});
-    panes.label("Only one pane", .{});
+    const panes = ui.splitter(ratio.binding());
+    _ = panes.label("Only one pane");
     try std.testing.expectError(error.InvalidPaneCount, snapshot.finish());
 }
 
@@ -140,21 +140,21 @@ fn allocationScenario(allocator: Allocator) !void {
     const snapshot = try Snapshot.create(allocator);
     defer snapshot.destroy();
     var ui = snapshot.builder();
-    var column = ui.vbox(.{ .key = "column" });
-    column.checkbox("toggle", state.binding(), .{});
-    column.textField(text.binding(), .{});
-    column.labelFmt("Value: {s}", .{text.get(&ui)}, .{});
-    var row = column.hbox(.{});
-    row.button("Action", .{});
-    var grid = column.grid(.{ .columns = 2 });
-    grid.label("Cell", .{});
-    var scroll = column.scroll(.{});
-    scroll.label("Scrollable", .{});
+    const column = ui.vbox().key("column");
+    _ = column.checkbox("toggle", state.binding());
+    _ = column.textField(text.binding());
+    _ = column.labelFmt("Value: {s}", .{text.get(&ui)});
+    const row = column.hbox();
+    _ = row.button("Action");
+    const grid = column.grid().columns(2);
+    _ = grid.label("Cell");
+    const scroll = column.scroll();
+    _ = scroll.label("Scrollable");
     var ratio = State(u8).init(allocator, 50);
     defer ratio.deinit();
-    var panes = column.splitter(ratio.binding(), .{});
-    panes.label("Left", .{});
-    panes.label("Right", .{});
+    const panes = column.splitter(ratio.binding());
+    _ = panes.label("Left");
+    _ = panes.label("Right");
     try snapshot.finish();
     try observer.prepare(snapshot.dependencies.items);
     observer.commit(snapshot.dependencies.items);
@@ -163,4 +163,71 @@ fn allocationScenario(allocator: Allocator) !void {
 
 test "all core allocation failures clean up declarations, text and subscriptions" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, allocationScenario, .{});
+}
+
+test "temporary chains and copied handles share a node and own keys and text" {
+    const snapshot = try Snapshot.create(std.testing.allocator);
+    defer snapshot.destroy();
+    const ui = snapshot.builder();
+    const box = ui.vbox().key("box").padding(12).gap(4);
+    var text = [_]u8{ 'o', 'k' };
+    var key = [_]u8{ 'i', 'd' };
+    const original = box.label(&text).key(&key).visible(false)
+        .widthPercent(50).width(120).height(20).heightPercent(75);
+    const copy = original;
+    _ = copy.visible(true).textColor(0x123456).key("renamed").key(&key);
+    text[0] = 'x';
+    key[0] = 'x';
+    try snapshot.finish();
+    try std.testing.expectEqual(1, box.parent.?.children.items.len);
+    try std.testing.expectEqual(original.parent, copy.parent);
+    const declaration = original.parent.?;
+    try std.testing.expectEqualStrings("ok", declaration.text);
+    try std.testing.expectEqualStrings("id", declaration.options.key.?);
+    try std.testing.expect(declaration.options.visible);
+    try std.testing.expectEqual(120, declaration.options.width.?);
+    try std.testing.expect(declaration.options.width_percent == null);
+    try std.testing.expectEqual(75, declaration.options.height_percent.?);
+    try std.testing.expect(declaration.options.height == null);
+    try std.testing.expectEqual(0x123456, declaration.options.text_color.?);
+    // Reapplying a key must not mistake the same node for a sibling duplicate.
+    _ = original.key("id");
+    try snapshot.finish();
+}
+
+test "a failed modifier disables copies and chains while preserving the first error" {
+    const snapshot = try Snapshot.create(std.testing.allocator);
+    defer snapshot.destroy();
+    const ui = snapshot.builder();
+    const before = ui.label("kept").width(80);
+    const copy = before;
+    const invalid = ui.vbox().widthPercent(101).padding(12).visible(false);
+    _ = invalid.hbox().label("ignored").key("ignored");
+    _ = copy.width(999).key("also ignored");
+    _ = ui.labelFmt("ignored {d}", .{10});
+    ui.fail(error.LaterFailure);
+    try std.testing.expect(invalid.parent == null);
+    try std.testing.expectEqual(2, snapshot.root.children.items.len);
+    try std.testing.expectEqual(80, before.parent.?.options.width.?);
+    try std.testing.expect(before.parent.?.options.key == null);
+    try std.testing.expectError(error.InvalidLayout, snapshot.finish());
+}
+
+test "leaf handles cannot receive children and virtual Views reject physical modifiers" {
+    const Model = struct {
+        pub fn content(_: *@This(), ui: *core.Builder) void {
+            _ = ui.label("child");
+        }
+    };
+    var model = Model{};
+    const leaf_snapshot = try Snapshot.create(std.testing.allocator);
+    defer leaf_snapshot.destroy();
+    const leaf_ui = leaf_snapshot.builder();
+    _ = leaf_ui.label("leaf").label("invalid child");
+    try std.testing.expectError(error.InvalidParent, leaf_snapshot.finish());
+    const view_snapshot = try Snapshot.create(std.testing.allocator);
+    defer view_snapshot.destroy();
+    const view_ui = view_snapshot.builder();
+    _ = view_ui.view(&model).key("view").visible(false);
+    try std.testing.expectError(error.InvalidViewModifier, view_snapshot.finish());
 }

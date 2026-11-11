@@ -14,7 +14,6 @@ pub const State = core.State;
 pub const TextState = core.TextState;
 pub const Binding = core.Binding;
 pub const Signal = core.Signal;
-pub const Options = core.Options;
 pub const callback = core.callback;
 
 test {

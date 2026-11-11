@@ -17,9 +17,9 @@ pub const Counter = struct {
         self.count.deinit();
     }
     pub fn content(self: *Counter, ui: *zui.Builder) void {
-        ui.labelFmt("Page {s}: {d}", .{ self.name, self.count.get(ui) }, .{});
-        ui.button("Increment", .{ .key = self.name, .on_click = zui.callback(self, increment) });
-        ui.textField(self.text.binding(), .{});
+        _ = ui.labelFmt("Page {s}: {d}", .{ self.name, self.count.get(ui) });
+        _ = ui.button("Increment").key(self.name).onClick(zui.callback(self, increment));
+        _ = ui.textField(self.text.binding());
     }
     fn increment(self: *Counter) !void {
         try self.count.set(self.count.peek() + 1);
@@ -44,11 +44,13 @@ pub const Pages = struct {
 
 pub fn content(model: *Model, ui: *zui.Builder) void {
     const pages = &model.pages;
-    ui.checkbox("Show page B", pages.second.binding(), .{ .key = "view-switch" });
+    _ = ui.checkbox("Show page B", pages.second.binding()).key("view-switch");
     const second = pages.second.get(ui);
-    var first_page = ui.vbox(.{ .key = "view-page-a", .visible = !second });
-    first_page.view(&pages.a, .{ .key = "view-a" });
-    var second_page = ui.vbox(.{ .key = "view-page-b", .visible = second });
-    second_page.view(&pages.b, .{ .key = "view-b" });
-    ui.label("Switch pages: controls and carets are retained. Each counter updates its own View.", .{ .width_percent = 100, .small_text = true });
+    const first_page = ui.vbox().key("view-page-a").visible(!second);
+    _ = first_page.view(&pages.a).key("view-a");
+    const second_page = ui.vbox().key("view-page-b").visible(second);
+    _ = second_page.view(&pages.b).key("view-b");
+    _ = ui.label("Switch pages: controls and carets are retained. Each counter updates its own View.")
+        .widthPercent(100)
+        .smallText(true);
 }

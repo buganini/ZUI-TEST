@@ -38,33 +38,36 @@ pub const Demo = struct {
         self.count.deinit();
     }
     pub fn content(self: *Demo, ui: *zui.Builder) void {
-        var page = ui.vbox(.{ .key = "page", .padding = 20, .gap = 16 });
-        page.label("ZUI / Zig + LVGL", .{});
-        var counter = page.hbox(.{});
-        counter.button("-", .{ .key = "decrement", .on_click = zui.callback(self, decrement) });
-        counter.labelFmt("Count: {d}", .{self.count.get(ui)}, .{ .key = "count", .width = 140 });
-        counter.button("+", .{ .key = "increment", .on_click = zui.callback(self, increment) });
+        const page = ui.vbox().key("page").padding(20).gap(16);
+        _ = page.label("ZUI / Zig + LVGL");
+        const counter = page.hbox();
+        _ = counter.button("-").key("decrement").onClick(zui.callback(self, decrement));
+        _ = counter.labelFmt("Count: {d}", .{self.count.get(ui)}).key("count").width(140);
+        _ = counter.button("+").key("increment").onClick(zui.callback(self, increment));
 
-        page.checkbox("Show greeting", self.show.binding(), .{ .key = "show" });
-        var form = page.grid(.{ .columns = 2 });
-        form.label("Your name", .{});
-        form.textField(self.name.binding(), .{ .key = "name" });
+        _ = page.checkbox("Show greeting", self.show.binding()).key("show");
+        const form = page.grid().columns(2);
+        _ = form.label("Your name");
+        _ = form.textField(self.name.binding()).key("name");
         if (self.show.get(ui))
-            page.labelFmt("Hello, {s}!", .{self.name.get(ui)}, .{ .key = "greeting" });
+            _ = page.labelFmt("Hello, {s}!", .{self.name.get(ui)}).key("greeting");
 
         const length = self.length.get(ui);
         const reversed = self.reversed.get(ui);
-        var actions = page.hbox(.{});
-        actions.button("Add row", .{ .key = "add", .disabled = length == keys.len, .on_click = zui.callback(self, add) });
-        actions.button("Remove row", .{ .key = "remove", .disabled = length == 0, .on_click = zui.callback(self, remove) });
-        actions.button("Reverse", .{ .key = "reverse", .on_click = zui.callback(self, reverse) });
-        page.label("Edit a row, then reverse: the same editor is retained.", .{});
-        var list = page.scroll(.{ .key = "list", .height = 210, .gap = 10 });
+        const actions = page.hbox();
+        _ = actions.button("Add row").key("add").disabled(length == keys.len).onClick(zui.callback(self, add));
+        _ = actions.button("Remove row")
+            .key("remove")
+            .disabled(length == 0)
+            .onClick(zui.callback(self, remove));
+        _ = actions.button("Reverse").key("reverse").onClick(zui.callback(self, reverse));
+        _ = page.label("Edit a row, then reverse: the same editor is retained.");
+        const list = page.scroll().key("list").height(210).gap(10);
         for (0..length) |index| {
             const i = if (reversed) length - 1 - index else index;
-            var row = list.hbox(.{ .key = keys[i] });
-            row.labelFmt("Row {d}", .{i + 1}, .{ .width = 100 });
-            row.textField(self.items[i].binding(), .{ .width = 360 });
+            const row = list.hbox().key(keys[i]);
+            _ = row.labelFmt("Row {d}", .{i + 1}).width(100);
+            _ = row.textField(self.items[i].binding()).width(360);
         }
     }
     fn increment(self: *Demo) !void {

@@ -15,8 +15,8 @@ const Child = struct {
     pub fn content(self: *@This(), ui: *zui.Builder) void {
         self.calls += 1;
         const value = if (self.use_alternate) self.alternate.?.get(ui) else self.value.get(ui);
-        if (self.count > 0) ui.labelFmt("{d}", .{value}, .{ .key = self.key });
-        for (1..@max(1, self.count)) |_| ui.label("extra", .{});
+        if (self.count > 0) _ = ui.labelFmt("{d}", .{value}).key(self.key);
+        for (1..@max(1, self.count)) |_| _ = ui.label("extra");
         if (self.fail) ui.fail(error.ChildFailed);
     }
 };
@@ -28,12 +28,12 @@ const Parent = struct {
     calls: usize = 0,
     pub fn content(self: *@This(), ui: *zui.Builder) void {
         self.calls += 1;
-        var grid = ui.grid(.{ .key = "grid", .columns = 2 });
-        grid.label("before", .{ .key = "before" });
-        if (self.reverse) grid.view(self.second, .{ .key = "second" });
-        if (self.show) grid.view(self.first, .{ .key = "first" });
-        if (!self.reverse) grid.view(self.second, .{ .key = "second" });
-        grid.label("after", .{ .key = "after" });
+        const grid = ui.grid().key("grid").columns(2);
+        _ = grid.label("before").key("before");
+        if (self.reverse) _ = grid.view(self.second).key("second");
+        if (self.show) _ = grid.view(self.first).key("first");
+        if (!self.reverse) _ = grid.view(self.second).key("second");
+        _ = grid.label("after").key("after");
     }
 };
 fn label(app: *zui.App, key: []const u8) []const u8 {
@@ -183,10 +183,10 @@ test "visibility retains controls, caret and subscriptions while if removes them
         present: bool = true,
         pub fn content(self: *@This(), ui: *zui.Builder) void {
             if (self.present) {
-                var box = ui.vbox(.{ .key = "box", .visible = self.visible.get(ui) });
-                box.textField(self.text.binding(), .{ .key = "editor" });
+                const box = ui.vbox().key("box").visible(self.visible.get(ui));
+                _ = box.textField(self.text.binding()).key("editor");
             }
-            ui.label("after", .{ .key = "after" });
+            _ = ui.label("after").key("after");
         }
     };
     var model = Model{ .visible = zui.State(bool).init(a, true), .text = try zui.TextState.init(a, "hello") };
@@ -249,14 +249,14 @@ test "nested Views sharing a Signal commit all subscriptions before independent 
         value: *zui.State(i32),
         children: [12]Child,
         pub fn content(self: *@This(), ui: *zui.Builder) void {
-            ui.labelFmt("root {d}", .{self.value.get(ui)}, .{});
-            for (&self.children) |*child| ui.view(child, .{});
+            _ = ui.labelFmt("root {d}", .{self.value.get(ui)});
+            for (&self.children) |*child| _ = ui.view(child);
         }
     };
     const Root = struct {
         branch: *Branch,
         pub fn content(self: *@This(), ui: *zui.Builder) void {
-            ui.view(self.branch, .{ .key = "branch" });
+            _ = ui.view(self.branch).key("branch");
         }
     };
     var value = zui.State(i32).init(a, 1);

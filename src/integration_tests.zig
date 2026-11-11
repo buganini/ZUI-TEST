@@ -35,28 +35,28 @@ const Model = struct {
         self.count.deinit();
     }
     pub fn content(self: *Model, ui: *zui.Builder) !void {
-        var box = ui.vbox(.{ .key = "main", .padding = 12 });
+        const box = ui.vbox().key("main").padding(12);
         const value = if (self.use_alternate) self.alternate.get(ui) else self.count.get(ui);
-        box.labelFmt("Count: {d}", .{value}, .{ .key = "count" });
+        _ = box.labelFmt("Count: {d}", .{value}).key("count");
         if (self.mutate) try self.count.set(42);
         if (self.fail) return error.BuilderFailed;
-        if (self.duplicate) box.label("duplicate", .{ .key = "count" });
-        box.button("+", .{ .key = "increment", .on_click = zui.callback(self, increment) });
-        box.checkbox("Enabled", self.checked.binding(), .{ .key = "check" });
-        box.textField(self.text.binding(), .{ .key = "text" });
+        if (self.duplicate) _ = box.label("duplicate").key("count");
+        _ = box.button("+").key("increment").onClick(zui.callback(self, increment));
+        _ = box.checkbox("Enabled", self.checked.binding()).key("check");
+        _ = box.textField(self.text.binding()).key("text");
         if (self.show.get(ui))
-            box.button("Remove me", .{ .key = "remove", .on_click = zui.callback(self, remove) });
-        var list = box.hbox(.{ .key = "items" });
+            _ = box.button("Remove me").key("remove").onClick(zui.callback(self, remove));
+        const list = box.hbox().key("items");
         const keys = [_][]const u8{ "a", "b", "c" };
         for (0..self.length) |index| {
             const i = if (self.reversed) self.length - 1 - index else index;
-            list.label(keys[i], .{ .key = keys[i] });
+            _ = list.label(keys[i]).key(keys[i]);
         }
-        var grid = box.grid(.{ .key = "grid", .columns = 2 });
-        grid.label("first", .{});
-        grid.label("second", .{});
-        var scroll = box.scroll(.{ .key = "scroll", .height = 60 });
-        scroll.label("scroll content", .{});
+        const grid = box.grid().key("grid").columns(2);
+        _ = grid.label("first");
+        _ = grid.label("second");
+        const scroll = box.scroll().key("scroll").height(60);
+        _ = scroll.label("scroll content");
     }
     fn increment(self: *Model) !void {
         try self.count.set(self.count.peek() + 1);
@@ -190,12 +190,12 @@ test "void content runs to completion before deferred errors reject the tree and
         pub fn content(self: *@This(), ui: *zui.Builder) void {
             self.completed = false;
             const value = if (self.fail) self.alternate.get(ui) else self.first.get(ui);
-            ui.labelFmt("Value: {d}", .{value}, .{ .key = "value" });
+            _ = ui.labelFmt("Value: {d}", .{value}).key("value");
             if (self.fail) {
-                ui.button("Duplicate", .{ .key = "value" });
-                var invalid = ui.grid(.{ .columns = 0 });
-                var nested = invalid.vbox(.{});
-                nested.label("Ignored", .{});
+                _ = ui.button("Duplicate").key("value");
+                const invalid = ui.grid().columns(0);
+                const nested = invalid.vbox();
+                _ = nested.label("Ignored");
                 ui.fail(error.LaterError);
             }
             self.completed = true;
@@ -291,16 +291,15 @@ test "splitter resizes retained panes, clamps keyboard input and rejects missing
         vertical: bool = false,
         missing: bool = false,
         pub fn content(self: *@This(), ui: *zui.Builder) !void {
-            var panes = ui.splitter(self.ratio.binding(), .{
-                .key = "panes",
-                .height_percent = 100,
-                .vertical = self.vertical,
-            });
-            var left = panes.vbox(.{ .key = "left" });
-            left.label("Code", .{});
+            const panes = ui.splitter(self.ratio.binding())
+                .key("panes")
+                .heightPercent(100)
+                .vertical(self.vertical);
+            const left = panes.vbox().key("left");
+            _ = left.label("Code");
             if (!self.missing) {
-                var right = panes.vbox(.{ .key = "right" });
-                right.label("Result", .{});
+                const right = panes.vbox().key("right");
+                _ = right.label("Result");
             }
         }
     };
